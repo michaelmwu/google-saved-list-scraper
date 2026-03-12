@@ -35,19 +35,25 @@ class ParseError(RuntimeError):
 def parse_saved_list_artifacts(
     list_url: str,
     *,
+    resolved_url: str | None = None,
     runtime_state: JSONValue | None = None,
     script_texts: Sequence[str] = (),
     html: str | None = None,
 ) -> SavedList:
     """Parse a saved list from browser artifacts."""
-    list_id = extract_list_id(list_url)
+    list_id = extract_list_id(resolved_url or "") or extract_list_id(list_url)
     roots = _collect_roots(runtime_state=runtime_state, script_texts=script_texts, html=html)
     best_result: SavedList | None = None
     best_score = -1
 
     for root in roots:
         for candidate in _candidate_nodes(root, list_id=list_id):
-            parsed = _parse_candidate_node(list_url, candidate.node, list_id=list_id)
+            parsed = _parse_candidate_node(
+                list_url,
+                candidate.node,
+                resolved_url=resolved_url,
+                list_id=list_id,
+            )
             score = candidate.signal_score + len(parsed.places) * 10
             if parsed.title is not None:
                 score += 2
@@ -203,12 +209,19 @@ def _signal_score(value: str, *, list_id: str | None) -> int:
     return score
 
 
-def _parse_candidate_node(list_url: str, node: JSONValue, *, list_id: str | None) -> SavedList:
+def _parse_candidate_node(
+    list_url: str,
+    node: JSONValue,
+    *,
+    resolved_url: str | None,
+    list_id: str | None,
+) -> SavedList:
     title, description = _extract_metadata(node)
     places = _extract_places(node)
     resolved_list_id = list_id or _find_list_id_in_node(node)
     return SavedList(
         source_url=list_url,
+        resolved_url=resolved_url,
         list_id=resolved_list_id,
         title=title,
         description=description,

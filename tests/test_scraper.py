@@ -9,6 +9,7 @@ from google_saved_lists.scraper import (
     ScrapeError,
     _handle_google_consent,
     _has_google_consent_screen,
+    _read_resolved_url,
 )
 
 
@@ -93,6 +94,14 @@ class _FakeContext:
 
 
 class ScraperConsentTests(unittest.TestCase):
+    def test_reads_resolved_url_from_page(self) -> None:
+        page = _FakeContext(
+            text="",
+            url="https://www.google.com/maps/@30.5370705,125.4120472,6z/data=!4m3!11m2!2sUGEPbA20Qd-OH4uoWjmDgQ!3e3?entry=ttu",
+        )
+
+        self.assertEqual(_read_resolved_url(page), page.url)
+
     def test_detects_italian_consent_screen(self) -> None:
         page = _FakeContext(
             text="Google\nPrima di continuare su Google\nRifiuta tutto\nAccetta tutto",
