@@ -15,6 +15,7 @@ class PublicApiTests(unittest.TestCase):
         place = Place(
             name="Yakumo",
             address="Shibuya, Tokyo",
+            note="Delicious wonton ramen. You can ask for a mix of white and dark broth.",
             lat=35.6501307,
             lng=139.6868459,
             maps_url="https://maps.google.com/?cid=7451636382641713350",
@@ -46,6 +47,10 @@ class PublicApiTests(unittest.TestCase):
                     {
                         "name": "Yakumo",
                         "address": "Shibuya, Tokyo",
+                        "note": (
+                            "Delicious wonton ramen. You can ask for a mix of white and "
+                            "dark broth."
+                        ),
                         "lat": 35.6501307,
                         "lng": 139.6868459,
                         "maps_url": "https://maps.google.com/?cid=7451636382641713350",

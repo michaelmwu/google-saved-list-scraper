@@ -11,6 +11,7 @@ class Place:
 
     name: str
     address: str | None
+    note: str | None
     lat: float
     lng: float
     maps_url: str
@@ -22,10 +23,13 @@ class Place:
         result: dict[str, object] = {
             "name": self.name,
             "address": self.address,
+            "note": self.note,
             "lat": self.lat,
             "lng": self.lng,
             "maps_url": self.maps_url,
         }
+        if self.note is None:
+            del result["note"]
         if self.cid is not None:
             result["cid"] = self.cid
         if self.google_id is not None:

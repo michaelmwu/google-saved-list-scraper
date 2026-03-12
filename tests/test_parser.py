@@ -38,6 +38,7 @@ _LIST_NODE = [
                 "/g/11yakumo",
             ],
             "Yakumo",
+            "Delicious wonton ramen. You can ask for a mix of white and dark broth.",
         ],
         [
             None,
@@ -68,6 +69,10 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(parsed.description, "Best spots in the city")
         self.assertEqual(len(parsed.places), 2)
         self.assertEqual(parsed.places[0].name, "Yakumo")
+        self.assertEqual(
+            parsed.places[0].note,
+            "Delicious wonton ramen. You can ask for a mix of white and dark broth.",
+        )
         self.assertEqual(parsed.places[0].cid, "7451636382641713350")
         self.assertEqual(parsed.places[0].maps_url, "https://maps.google.com/?cid=7451636382641713350")
 

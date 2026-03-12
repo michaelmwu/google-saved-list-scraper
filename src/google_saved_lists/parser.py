@@ -279,9 +279,11 @@ def _extract_places(node: JSONValue) -> list[Place]:
         cid = _find_cid(metadata_node)
         google_id = _find_google_id(metadata_node)
         name = _find_place_name(ancestors, address=address)
+        note = _find_place_note(ancestors, name=name, address=address)
         place = Place(
             name=name or address or f"{lat:.6f},{lng:.6f}",
             address=address,
+            note=note,
             lat=lat,
             lng=lng,
             maps_url=_build_maps_url(lat=lat, lng=lng, cid=cid),
@@ -330,6 +332,23 @@ def _find_place_name(ancestors: Sequence[JSONValue], *, address: str | None) -> 
             candidate = _clean_text(value)
             if _is_name_candidate(candidate, address=address):
                 return candidate
+    return None
+
+
+def _find_place_note(
+    ancestors: Sequence[JSONValue],
+    *,
+    name: str | None,
+    address: str | None,
+) -> str | None:
+    for ancestor in reversed(ancestors):
+        if not isinstance(ancestor, list):
+            continue
+        if name is not None and _clean_text(_safe_index(ancestor, 2)) != name:
+            continue
+        preferred = _clean_text(_safe_index(ancestor, 3))
+        if _is_note_candidate(preferred, name=name, address=address):
+            return preferred
     return None
 
 
@@ -444,6 +463,23 @@ def _is_name_candidate(value: str | None, *, address: str | None) -> bool:
     if value is None:
         return False
     if not _is_plain_text(value):
+        return False
+    if address is not None and value == address:
+        return False
+    return True
+
+
+def _is_note_candidate(
+    value: str | None,
+    *,
+    name: str | None,
+    address: str | None,
+) -> bool:
+    if value is None:
+        return False
+    if not _is_plain_text(value):
+        return False
+    if name is not None and value == name:
         return False
     if address is not None and value == address:
         return False
