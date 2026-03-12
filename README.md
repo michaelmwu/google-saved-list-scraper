@@ -1,18 +1,153 @@
 # Google Saved List Scraper
 
-Python project for extracting places from Google Maps saved lists.
+Extract places from Google Maps saved lists with either a CLI or a Python import.
 
-## Goal
+The scraper opens the saved-list URL in a real browser session, reads Google Maps
+runtime data, and returns structured JSON for the list and its places.
 
-Given a Google Maps saved-list URL, load the page in a browser context, recover the placelist payload from runtime state, and return structured place data.
+## Requirements
 
-## Tooling
+- Python `3.14`
+- `uv`
+- `cloakbrowser` as a runtime dependency
 
-- Language: Python
-- Runner and dependency management: `uv`
-- Preferred command style: `uv run python ...`
-- Target version: Python `3.14`
-- Current stable patch: Python `3.14.3` as of March 12, 2026
+## Install
+
+This project is intended to be consumed directly from source rather than from PyPI.
+
+### Install From A Local Checkout
+
+Use this when the consumer project and this repo live on the same machine.
+
+```bash
+uv add /absolute/path/to/google-saved-lists
+```
+
+### Install From Git
+
+Use this when consumers should install directly from a repository.
+
+```bash
+uv add git+https://github.com/ORG/google-saved-lists.git
+```
+
+### Vendor The Source
+
+Copy `src/google_saved_lists/` into your project and keep its parent directory on the
+Python import path. If you vendor the package, also add the runtime dependency:
+
+```bash
+uv add cloakbrowser
+```
+
+Example vendored layout:
+
+```text
+your-project/
+  pyproject.toml
+  your_app/
+  google_saved_lists/
+    __init__.py
+    cli.py
+    models.py
+    parser.py
+    scraper.py
+    url_tools.py
+    py.typed
+```
+
+## CLI
+
+The package installs a `google-saved-lists` command.
+
+Basic usage:
+
+```bash
+uv run google-saved-lists "https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18"
+```
+
+Write JSON to a file:
+
+```bash
+uv run google-saved-lists \
+  "https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18" \
+  --output saved-list.json
+```
+
+Run with a visible browser for debugging:
+
+```bash
+uv run google-saved-lists \
+  "https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18" \
+  --headed
+```
+
+Available CLI options:
+
+- `--output PATH` writes the JSON result to a file
+- `--headed` runs the browser in headed mode
+- `--timeout-ms INTEGER` controls the navigation timeout
+- `--settle-ms INTEGER` adds extra wait time after the page loads
+
+## Library Usage
+
+Import the package directly in application code:
+
+```python
+from google_saved_lists import scrape_saved_list
+
+result = scrape_saved_list("https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18")
+
+print(result.list_id)
+print(result.resolved_url)
+print(result.title)
+print(result.to_dict())
+```
+
+Public top-level imports intended for consumers:
+
+- `scrape_saved_list`
+- `parse_saved_list_artifacts`
+- `SavedList`
+- `Place`
+- `ParseError`
+- `ScrapeError`
+
+## Output
+
+The scraper returns a `SavedList` object. `to_dict()` produces JSON like this:
+
+```json
+{
+  "source_url": "https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18",
+  "resolved_url": "https://www.google.com/maps/@30.5370705,125.4120472,6z/data=!4m3!11m2!2sUGEPbA20Qd-OH4uoWjmDgQ!3e3?entry=ttu",
+  "list_id": "UGEPbA20Qd-OH4uoWjmDgQ",
+  "title": "Tokyo Dinners",
+  "description": "Best spots in the city",
+  "places": [
+    {
+      "name": "Yakumo",
+      "address": "Shibuya, Tokyo",
+      "note": "Delicious wonton ramen. You can ask for a mix of white and dark broth.",
+      "lat": 35.6501307,
+      "lng": 139.6868459,
+      "maps_url": "https://maps.google.com/?cid=7451636382641713350"
+    }
+  ]
+}
+```
+
+`source_url` preserves the caller's input URL. `resolved_url` captures the final browser
+URL after redirects, which is useful for short `maps.app.goo.gl` links.
+
+## Behavior Notes
+
+- The scraper is designed for Google Maps saved-list URLs.
+- It uses a real browser session because Google Maps does not expose the required data
+  reliably to simple HTTP clients.
+- Parsing is defensive and tolerates partial metadata, but Google can change its runtime
+  schema at any time.
+- The parser prefers the explicit placelist ID from the resolved URL when available.
 
 ## Development
 
@@ -22,110 +157,15 @@ Install the dev environment:
 uv sync --dev
 ```
 
-Run lint and type checking:
+Run the quality gates:
 
 ```bash
 ./scripts/lint.sh
 ./scripts/typecheck.sh
 ```
 
-Run the scraper:
+Run tests:
 
 ```bash
-uv run google-saved-lists "https://www.google.com/maps/@.../data=!4m3!11m2!2sLIST_ID!3e3"
+uv run python -m unittest discover -s tests
 ```
-
-## Planned Pipeline
-
-1. Extract the placelist ID from the saved-list URL when possible.
-2. Open the page in a real browser environment to avoid the incomplete HTML returned to simple HTTP clients.
-3. Read `APP_INITIALIZATION_STATE` or equivalent runtime state.
-4. Find the placelist payload inside the runtime object tree.
-5. Remove any XSSI prefix, unescape the payload, and decode it as JSON.
-6. Parse list metadata and place entries into a stable JSON result.
-
-## Parsing Strategy
-
-### Primary signal
-
-The strongest identifier is the placelist ID from the URL, typically the `!2s...` token.
-
-Example:
-
-```python
-import re
-
-match = re.search(r"!2s([^!]+)", url)
-list_id = match.group(1) if match else None
-```
-
-When walking runtime strings or nested arrays, prefer candidates that contain this exact ID.
-
-### Fallback signal
-
-Using `maps/placelists/list/` as a fallback is a good idea.
-
-It should be a secondary signal, not the first one:
-
-- Exact placelist ID match is more specific and less likely to collide.
-- `maps/placelists/list/` is still useful for locating the metadata node when the ID is not present in a reachable string.
-- The fallback should produce candidate nodes that are validated by nearby structure, not accepted blindly.
-
-Recommended rule:
-
-1. Search for an exact placelist ID match.
-2. If that fails, search for strings containing `maps/placelists/list/`.
-3. Score or validate the surrounding node by checking for expected list metadata and place-entry structure.
-
-## Resilient Place Detection
-
-Avoid relying on brittle deep indexes when extracting places. A more stable approach is to detect the coordinate tuple pattern Google tends to emit:
-
-```python
-[None, None, lat, lng]
-```
-
-Once a coordinate tuple is found, inspect the enclosing structure to extract:
-
-- place name
-- address
-- place identifier or CID
-- coordinates
-
-This is more resilient than binding the parser to one exact nested array layout.
-
-## Expected Output
-
-```json
-{
-  "source_url": "https://www.google.com/maps/@.../data=!4m3!11m2!2sLIST_ID!3e3",
-  "list_id": "UGEPbA20Qd-OH4uoWjmDgQ",
-  "title": "My list",
-  "description": "Optional text",
-  "places": [
-    {
-      "name": "Yakumo",
-      "address": "Shibuya, Tokyo",
-      "lat": 35.6501307,
-      "lng": 139.6868459,
-      "maps_url": "https://maps.google.com/?cid=7451636382641713350"
-    }
-  ]
-}
-```
-
-## Implementation Notes
-
-- Expect schema drift and partial data.
-- Keep parsing defensive and tolerate missing fields.
-- Treat the placelist URL marker as a locator, not as final proof that the enclosing array is the correct target.
-- Add fixtures for both exact-ID and fallback-only cases when tests are introduced.
-
-## Implementation
-
-The current codebase includes:
-
-- a CloakBrowser-backed scraper that loads the list page and collects runtime artifacts
-- a parser that ranks candidate placelist nodes using the explicit list ID first and the placelist URL marker second
-- coordinate-pattern-based place detection with defensive extraction of names, addresses, and CIDs
-- a CLI that emits the parsed list as JSON
