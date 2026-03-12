@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import unittest
 from typing import Any
+from unittest.mock import patch
 
 from google_saved_lists.scraper import (
     ScrapeError,
@@ -19,9 +20,12 @@ class _FakeLocator:
 
     def click(self, timeout: int) -> None:
         del timeout
+        if not self._context.allow_role_click:
+            raise RuntimeError("Role-based click disabled")
         for label in self._context.buttons:
             if self._pattern.search(label):
                 self._context.clicked.append(label)
+                self._context.dismiss_consent()
                 return
         raise RuntimeError("No matching button")
 
@@ -34,15 +38,31 @@ class _FakeContext:
         buttons: list[str] | None = None,
         url: str = "",
         frames: list[_FakeContext] | None = None,
+        allow_role_click: bool = True,
+        dismiss_on_click: bool = True,
     ) -> None:
         self._text = text
         self.buttons = buttons or []
         self.url = url
         self.frames = frames or []
+        self.allow_role_click = allow_role_click
+        self.dismiss_on_click = dismiss_on_click
         self.clicked: list[str] = []
         self.timeouts: list[int] = []
 
-    def evaluate(self, script: str) -> Any:
+    def evaluate(self, script: str, argument: Any = None) -> Any:
+        if "querySelectorAll" in script and isinstance(argument, list):
+            normalized_labels = {
+                label.strip().lower()
+                for label in argument
+                if isinstance(label, str)
+            }
+            for label in self.buttons:
+                if label.strip().lower() in normalized_labels:
+                    self.clicked.append(label)
+                    self.dismiss_consent()
+                    return True
+            return False
         if "innerText" in script:
             return self._text
         return None
@@ -57,6 +77,19 @@ class _FakeContext:
 
     def wait_for_load_state(self, state: str, timeout: int) -> None:
         del state, timeout
+
+    def content(self) -> str:
+        return f"<html><body>{self._text}</body></html>"
+
+    def screenshot(self, *, path: str, full_page: bool) -> None:
+        del path, full_page
+
+    def dismiss_consent(self) -> None:
+        if not self.dismiss_on_click:
+            return
+        self._text = ""
+        self.buttons = []
+        self.url = ""
 
 
 class ScraperConsentTests(unittest.TestCase):
@@ -89,14 +122,27 @@ class ScraperConsentTests(unittest.TestCase):
 
         self.assertEqual(frame.clicked, ["Rifiuta tutto"])
 
+    def test_falls_back_to_dom_click_when_role_click_fails(self) -> None:
+        page = _FakeContext(
+            text="Google\nPrima di continuare su Google\nRifiuta tutto\nAccetta tutto",
+            buttons=["Rifiuta tutto", "Accetta tutto"],
+            allow_role_click=False,
+        )
+
+        _handle_google_consent(page, timeout_ms=5_000)
+
+        self.assertEqual(page.clicked, ["Rifiuta tutto"])
+
     def test_raises_when_reject_button_is_missing(self) -> None:
         page = _FakeContext(
             text="Google\nPrima di continuare su Google\nAccetta tutto",
             buttons=["Accetta tutto", "Altre opzioni"],
+            dismiss_on_click=False,
         )
 
-        with self.assertRaises(ScrapeError):
-            _handle_google_consent(page, timeout_ms=5_000)
+        with patch("google_saved_lists.scraper._capture_consent_diagnostics", return_value=[]):
+            with self.assertRaises(ScrapeError):
+                _handle_google_consent(page, timeout_ms=5_000)
 
 
 if __name__ == "__main__":

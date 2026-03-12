@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from google_saved_lists.models import SavedList
@@ -27,6 +29,10 @@ _REJECT_BUTTON_LABELS = (
     "Rechazar todo",
     "Tudo recusar",
     "Alles afwijzen",
+    "Odrzuć wszystko",
+    "Avvisa allt",
+    "Afvis alle",
+    "Hylää kaikki",
 )
 _MORE_OPTIONS_BUTTON_LABELS = (
     "More options",
@@ -36,6 +42,10 @@ _MORE_OPTIONS_BUTTON_LABELS = (
     "Más opciones",
     "Mais opções",
     "Meer opties",
+    "Więcej opcji",
+    "Fler alternativ",
+    "Flere valgmuligheder",
+    "Lisää vaihtoehtoja",
 )
 
 
@@ -132,21 +142,27 @@ def _read_script_texts(page: Any) -> list[str]:
 
 
 def _handle_google_consent(page: Any, *, timeout_ms: int) -> None:
+    for _ in range(2):
+        if not _has_google_consent_screen(page):
+            return
+        if _click_button_in_contexts(page, _REJECT_BUTTON_LABELS):
+            _settle_after_consent(page, timeout_ms=timeout_ms)
+            continue
+        if _click_button_in_contexts(page, _MORE_OPTIONS_BUTTON_LABELS):
+            page.wait_for_timeout(500)
+            if _click_button_in_contexts(page, _REJECT_BUTTON_LABELS):
+                _settle_after_consent(page, timeout_ms=timeout_ms)
+                continue
+        break
+
     if not _has_google_consent_screen(page):
         return
 
-    if _click_button_in_contexts(page, _REJECT_BUTTON_LABELS):
-        _settle_after_consent(page, timeout_ms=timeout_ms)
-        return
-
-    if _click_button_in_contexts(page, _MORE_OPTIONS_BUTTON_LABELS):
-        page.wait_for_timeout(500)
-        if _click_button_in_contexts(page, _REJECT_BUTTON_LABELS):
-            _settle_after_consent(page, timeout_ms=timeout_ms)
-            return
-
+    diagnostics = _capture_consent_diagnostics(page)
+    details = ", ".join(str(path) for path in diagnostics)
     raise ScrapeError(
-        "Detected a Google consent screen but could not reject cookies automatically."
+        f"Detected a Google consent screen but could not reject cookies automatically. "
+        f"Saved diagnostics: {details}"
     )
 
 
@@ -173,12 +189,17 @@ def _has_google_consent_screen(page: Any) -> bool:
 def _click_button_in_contexts(page: Any, labels: tuple[str, ...]) -> bool:
     pattern = _button_label_pattern(labels)
     for context in _iter_contexts(page):
-        try:
-            context.get_by_role("button", name=pattern).first.click(timeout=1_500)
-        except Exception:
-            continue
-        return True
+        if _click_button(context, pattern=pattern, labels=labels):
+            return True
     return False
+
+
+def _click_button(context: Any, *, pattern: re.Pattern[str], labels: tuple[str, ...]) -> bool:
+    try:
+        context.get_by_role("button", name=pattern).first.click(timeout=1_500)
+    except Exception:
+        return _click_button_with_dom(context, labels)
+    return True
 
 
 def _button_label_pattern(labels: tuple[str, ...]) -> re.Pattern[str]:
@@ -203,3 +224,65 @@ def _read_body_text(context: Any) -> str:
     if not isinstance(value, str):
         return ""
     return value
+
+
+def _click_button_with_dom(context: Any, labels: tuple[str, ...]) -> bool:
+    script = """
+    (labels) => {
+      const normalize = (value) => value.trim().replace(/\\s+/g, " ").toLowerCase();
+      const expected = new Set(labels.map(normalize));
+      const selector = [
+        "button",
+        '[role="button"]',
+        'input[type="button"]',
+        'input[type="submit"]'
+      ].join(", ");
+      const candidates = Array.from(document.querySelectorAll(selector));
+
+      for (const element of candidates) {
+        const text = normalize(element.innerText || element.textContent || element.value || "");
+        if (!expected.has(text)) {
+          continue;
+        }
+        element.click();
+        return true;
+      }
+      return false;
+    }
+    """
+    try:
+        clicked = context.evaluate(script, list(labels))
+    except Exception:
+        return False
+    return clicked is True
+
+
+def _capture_consent_diagnostics(page: Any) -> list[Path]:
+    diagnostics_dir = Path(".context/diagnostics")
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+    saved_paths: list[Path] = []
+    html_path = diagnostics_dir / f"google-consent-{timestamp}.html"
+    text_path = diagnostics_dir / f"google-consent-{timestamp}.txt"
+    screenshot_path = diagnostics_dir / f"google-consent-{timestamp}.png"
+
+    try:
+        html_path.write_text(page.content(), encoding="utf-8")
+        saved_paths.append(html_path)
+    except Exception:
+        pass
+
+    try:
+        text_path.write_text(_read_body_text(page), encoding="utf-8")
+        saved_paths.append(text_path)
+    except Exception:
+        pass
+
+    try:
+        page.screenshot(path=str(screenshot_path), full_page=True)
+        saved_paths.append(screenshot_path)
+    except Exception:
+        pass
+
+    return saved_paths
