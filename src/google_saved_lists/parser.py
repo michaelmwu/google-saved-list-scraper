@@ -162,14 +162,6 @@ def _load_json_candidate(text: str) -> JSONValue | None:
         try:
             parsed = json.loads(working)
         except json.JSONDecodeError:
-            if working.startswith('"') and working.endswith('"'):
-                try:
-                    nested = json.loads(working)
-                except json.JSONDecodeError:
-                    return None
-                if isinstance(nested, str):
-                    working = nested
-                    continue
             return None
         if isinstance(parsed, str) and parsed != working:
             working = parsed

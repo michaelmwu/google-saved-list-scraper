@@ -98,6 +98,8 @@ This is more resilient than binding the parser to one exact nested array layout.
 
 ```json
 {
+  "source_url": "https://www.google.com/maps/@.../data=!4m3!11m2!2sLIST_ID!3e3",
+  "list_id": "UGEPbA20Qd-OH4uoWjmDgQ",
   "title": "My list",
   "description": "Optional text",
   "places": [

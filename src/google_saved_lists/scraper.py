@@ -95,7 +95,7 @@ def collect_browser_artifacts(
     try:
         from cloakbrowser import launch  # type: ignore[import-untyped]
     except ImportError as exc:  # pragma: no cover - dependency error path
-        raise ScrapeError("CloakBrowser is not installed. Run `uv sync --dev`.") from exc
+        raise ScrapeError("CloakBrowser is not installed. Run `uv sync`.") from exc
 
     browser = launch(headless=headless, humanize=True)
     try:

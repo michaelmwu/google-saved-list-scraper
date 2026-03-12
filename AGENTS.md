@@ -41,6 +41,8 @@ Return structured JSON shaped like:
 
 ```json
 {
+  "source_url": "https://www.google.com/maps/@.../data=!4m3!11m2!2sLIST_ID!3e3",
+  "list_id": "UGEPbA20Qd-OH4uoWjmDgQ",
   "title": "string",
   "description": "string",
   "places": [
