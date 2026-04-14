@@ -45,6 +45,7 @@ class _PlaceEntry:
 def write_debug_dump(
     list_url: str,
     *,
+    resolved_url: str | None = None,
     runtime_state: JSONValue | None,
     script_texts: Sequence[str],
     html: str | None,
@@ -64,9 +65,14 @@ def write_debug_dump(
     _write_json(artifacts_dir / "script_texts.json", list(script_texts))
     (artifacts_dir / "page.html").write_text(html or "", encoding="utf-8")
 
-    list_id = extract_list_id(list_url)
+    list_id = extract_list_id(resolved_url or list_url)
     roots = _collect_roots(runtime_state=runtime_state, script_texts=script_texts, html=html)
-    ranked_candidates = _rank_candidates(list_url, roots=roots, list_id=list_id)
+    ranked_candidates = _rank_candidates(
+        list_url,
+        resolved_url=resolved_url,
+        roots=roots,
+        list_id=list_id,
+    )
 
     manifest_candidates: list[dict[str, object]] = []
     for index, candidate in enumerate(ranked_candidates[:max_candidates], start=1):
@@ -129,6 +135,7 @@ def write_debug_dump(
 
     summary = {
         "source_url": list_url,
+        "resolved_url": resolved_url,
         "list_id": list_id,
         "root_count": len(roots),
         "candidate_count": len(ranked_candidates),
@@ -148,6 +155,7 @@ def write_debug_dump(
 def _rank_candidates(
     list_url: str,
     *,
+    resolved_url: str | None,
     roots: Sequence[JSONValue],
     list_id: str | None,
 ) -> list[_RankedCandidate]:
@@ -160,7 +168,12 @@ def _rank_candidates(
             if serialized in seen:
                 continue
             seen.add(serialized)
-            parsed = _parse_candidate_node(list_url, candidate.node, list_id=list_id)
+            parsed = _parse_candidate_node(
+                list_url,
+                candidate.node,
+                resolved_url=resolved_url,
+                list_id=list_id,
+            )
             ranking_score = candidate.signal_score + len(parsed.places) * 10
             if parsed.title is not None:
                 ranking_score += 2

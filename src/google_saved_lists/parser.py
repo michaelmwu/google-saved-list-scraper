@@ -20,6 +20,7 @@ type JSONValue = JSONScalar | list["JSONValue"] | dict[str, "JSONValue"]
 
 _XSSI_PREFIX = ")]}'"
 _APP_STATE_PATTERN = re.compile(r"APP_INITIALIZATION_STATE\s*=\s*", re.MULTILINE)
+_FAVORITE_MARKERS = frozenset({"❤", "♥", "♥️", "❤️"})
 
 
 @dataclass(slots=True)
@@ -35,19 +36,25 @@ class ParseError(RuntimeError):
 def parse_saved_list_artifacts(
     list_url: str,
     *,
+    resolved_url: str | None = None,
     runtime_state: JSONValue | None = None,
     script_texts: Sequence[str] = (),
     html: str | None = None,
 ) -> SavedList:
     """Parse a saved list from browser artifacts."""
-    list_id = extract_list_id(list_url)
+    list_id = extract_list_id(resolved_url or "") or extract_list_id(list_url)
     roots = _collect_roots(runtime_state=runtime_state, script_texts=script_texts, html=html)
     best_result: SavedList | None = None
     best_score = -1
 
     for root in roots:
         for candidate in _candidate_nodes(root, list_id=list_id):
-            parsed = _parse_candidate_node(list_url, candidate.node, list_id=list_id)
+            parsed = _parse_candidate_node(
+                list_url,
+                candidate.node,
+                resolved_url=resolved_url,
+                list_id=list_id,
+            )
             score = candidate.signal_score + len(parsed.places) * 10
             if parsed.title is not None:
                 score += 2
@@ -203,12 +210,19 @@ def _signal_score(value: str, *, list_id: str | None) -> int:
     return score
 
 
-def _parse_candidate_node(list_url: str, node: JSONValue, *, list_id: str | None) -> SavedList:
+def _parse_candidate_node(
+    list_url: str,
+    node: JSONValue,
+    *,
+    resolved_url: str | None,
+    list_id: str | None,
+) -> SavedList:
     title, description = _extract_metadata(node)
     places = _extract_places(node)
     resolved_list_id = list_id or _find_list_id_in_node(node)
     return SavedList(
         source_url=list_url,
+        resolved_url=resolved_url,
         list_id=resolved_list_id,
         title=title,
         description=description,
@@ -266,14 +280,18 @@ def _extract_places(node: JSONValue) -> list[Place]:
         cid = _find_cid(metadata_node)
         google_id = _find_google_id(metadata_node)
         name = _find_place_name(ancestors, address=address)
+        note = _find_place_note(ancestors, name=name, address=address)
+        is_favorite = _find_place_is_favorite(ancestors, name=name)
         place = Place(
             name=name or address or f"{lat:.6f},{lng:.6f}",
             address=address,
+            note=note,
             lat=lat,
             lng=lng,
             maps_url=_build_maps_url(lat=lat, lng=lng, cid=cid),
             cid=cid,
             google_id=google_id,
+            is_favorite=is_favorite,
         )
         dedupe_key = cid or google_id or f"{place.name}:{lat:.6f}:{lng:.6f}"
         if dedupe_key in seen:
@@ -318,6 +336,40 @@ def _find_place_name(ancestors: Sequence[JSONValue], *, address: str | None) -> 
             if _is_name_candidate(candidate, address=address):
                 return candidate
     return None
+
+
+def _find_place_note(
+    ancestors: Sequence[JSONValue],
+    *,
+    name: str | None,
+    address: str | None,
+) -> str | None:
+    for ancestor in reversed(ancestors):
+        if not isinstance(ancestor, list):
+            continue
+        if name is not None and _clean_text(_safe_index(ancestor, 2)) != name:
+            continue
+        preferred = _clean_text(_safe_index(ancestor, 3))
+        if _is_note_candidate(preferred, name=name, address=address):
+            return preferred
+    return None
+
+
+def _find_place_is_favorite(
+    ancestors: Sequence[JSONValue],
+    *,
+    name: str | None,
+) -> bool:
+    for ancestor in reversed(ancestors):
+        if not isinstance(ancestor, list):
+            continue
+        if not _is_place_record_node(ancestor):
+            continue
+        candidate_name = _clean_text(_safe_index(ancestor, 2))
+        if candidate_name is not None and name is not None and candidate_name != name:
+            continue
+        return _contains_favorite_marker(ancestor)
+    return False
 
 
 def _extract_address(node: list[JSONValue] | None) -> str | None:
@@ -367,6 +419,15 @@ def _find_google_id(node: list[JSONValue] | None) -> str | None:
         if value.startswith("/g/"):
             return value
     return None
+
+
+def _contains_favorite_marker(node: JSONValue) -> bool:
+    return any(value in _FAVORITE_MARKERS for value in _iter_strings(node))
+
+
+def _is_place_record_node(node: list[JSONValue]) -> bool:
+    metadata_node = _safe_index(node, 1)
+    return isinstance(metadata_node, list) and _contains_place_metadata_signal(metadata_node)
 
 
 def _find_list_id_in_node(node: JSONValue) -> str | None:
@@ -431,6 +492,23 @@ def _is_name_candidate(value: str | None, *, address: str | None) -> bool:
     if value is None:
         return False
     if not _is_plain_text(value):
+        return False
+    if address is not None and value == address:
+        return False
+    return True
+
+
+def _is_note_candidate(
+    value: str | None,
+    *,
+    name: str | None,
+    address: str | None,
+) -> bool:
+    if value is None:
+        return False
+    if not _is_plain_text(value):
+        return False
+    if name is not None and value == name:
         return False
     if address is not None and value == address:
         return False

@@ -75,6 +75,7 @@ def main() -> int:
     if debug_output_dir is not None:
         write_debug_dump(
             args.url,
+            resolved_url=artifacts.resolved_url,
             runtime_state=artifacts.runtime_state,
             script_texts=artifacts.script_texts,
             html=artifacts.html,
@@ -82,6 +83,7 @@ def main() -> int:
         )
     result = parse_saved_list_artifacts(
         args.url,
+        resolved_url=artifacts.resolved_url,
         runtime_state=artifacts.runtime_state,
         script_texts=artifacts.script_texts,
         html=artifacts.html,

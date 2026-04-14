@@ -53,6 +53,7 @@ _MORE_OPTIONS_BUTTON_LABELS = (
 class BrowserArtifacts:
     """Artifacts collected from a browser session."""
 
+    resolved_url: str | None
     runtime_state: JSONValue | None
     script_texts: list[str]
     html: str
@@ -78,6 +79,7 @@ def scrape_saved_list(
     )
     return parse_saved_list_artifacts(
         list_url,
+        resolved_url=artifacts.resolved_url,
         runtime_state=artifacts.runtime_state,
         script_texts=artifacts.script_texts,
         html=artifacts.html,
@@ -109,6 +111,7 @@ def collect_browser_artifacts(
         _handle_google_consent(page, timeout_ms=timeout_ms)
         page.wait_for_timeout(settle_time_ms)
 
+        resolved_url = _read_resolved_url(page)
         runtime_state = _read_runtime_state(page, timeout_ms=timeout_ms)
         script_texts = _read_script_texts(page)
         html = page.content()
@@ -117,7 +120,22 @@ def collect_browser_artifacts(
     finally:
         browser.close()
 
-    return BrowserArtifacts(runtime_state=runtime_state, script_texts=script_texts, html=html)
+    return BrowserArtifacts(
+        resolved_url=resolved_url,
+        runtime_state=runtime_state,
+        script_texts=script_texts,
+        html=html,
+    )
+
+
+def _read_resolved_url(page: Any) -> str | None:
+    value = getattr(page, "url", None)
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    return normalized
 
 
 def _read_runtime_state(page: Any, *, timeout_ms: int) -> JSONValue | None:

@@ -11,21 +11,27 @@ class Place:
 
     name: str
     address: str | None
+    note: str | None
     lat: float
     lng: float
     maps_url: str
     cid: str | None = None
     google_id: str | None = None
+    is_favorite: bool = False
 
     def to_dict(self) -> dict[str, object]:
         """Convert a place into a JSON-serializable dictionary."""
         result: dict[str, object] = {
             "name": self.name,
             "address": self.address,
+            "note": self.note,
+            "is_favorite": self.is_favorite,
             "lat": self.lat,
             "lng": self.lng,
             "maps_url": self.maps_url,
         }
+        if self.note is None:
+            del result["note"]
         if self.cid is not None:
             result["cid"] = self.cid
         if self.google_id is not None:
@@ -38,6 +44,7 @@ class SavedList:
     """A parsed Google Maps saved list."""
 
     source_url: str
+    resolved_url: str | None
     list_id: str | None
     title: str | None
     description: str | None
@@ -47,6 +54,7 @@ class SavedList:
         """Convert a saved list into a JSON-serializable dictionary."""
         return {
             "source_url": self.source_url,
+            "resolved_url": self.resolved_url,
             "list_id": self.list_id,
             "title": self.title,
             "description": self.description,
