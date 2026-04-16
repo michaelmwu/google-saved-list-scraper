@@ -1,17 +1,33 @@
-"""Browser-backed Google Maps saved-list scraper."""
+"""Google Maps saved-list scraper with HTTP and browser collectors."""
 
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http.cookiejar import LoadError, MozillaCookieJar
 from pathlib import Path
-from typing import Any, Required, TypedDict
+from typing import Any, Literal, Required, TypedDict
+from urllib.parse import urljoin
 
-from google_saved_lists.models import SavedList
-from google_saved_lists.parser import JSONValue, parse_saved_list_artifacts
+from gmaps_scraper.models import SavedList
+from gmaps_scraper.parser import JSONValue, ParseError, parse_saved_list_artifacts
+
+type CollectionMode = Literal["auto", "curl", "browser"]
 
 _CONSENT_URL_MARKERS = ("consent.google", "consent.youtube")
+_HTTP_IMPERSONATE = "chrome"
+DEFAULT_COLLECTION_MODE: CollectionMode = "auto"
+_LINK_TAG_PATTERN = re.compile(r"<link\b[^>]*>", re.IGNORECASE)
+_HTML_ATTRIBUTE_PATTERN = re.compile(
+    r"""\b([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(['"])(.*?)\2""",
+    re.DOTALL,
+)
+_SCRIPT_TEXT_PATTERN = re.compile(
+    r"<script\b[^>]*>(.*?)</script>",
+    re.IGNORECASE | re.DOTALL,
+)
 _CONSENT_TEXT_MARKERS = (
     "before you continue to google",
     "prima di continuare su google",
@@ -76,6 +92,14 @@ class BrowserSessionConfig:
     proxy: str | BrowserProxyConfig | None = None
 
 
+@dataclass(slots=True, frozen=True)
+class HttpSessionConfig:
+    """Controls curl-based cookie persistence and network identity."""
+
+    cookie_jar_path: Path | None = None
+    proxy: str | None = None
+
+
 class ScrapeError(RuntimeError):
     """Raised when browser automation fails."""
 
@@ -86,22 +110,154 @@ def scrape_saved_list(
     headless: bool = True,
     timeout_ms: int = 30_000,
     settle_time_ms: int = 3_000,
+    collection_mode: CollectionMode = DEFAULT_COLLECTION_MODE,
     browser_session: BrowserSessionConfig | None = None,
+    http_session: HttpSessionConfig | None = None,
 ) -> SavedList:
     """Scrape and parse a Google Maps saved list."""
-    artifacts = collect_browser_artifacts(
+    _, result = collect_saved_list_result(
         list_url,
         headless=headless,
         timeout_ms=timeout_ms,
         settle_time_ms=settle_time_ms,
+        collection_mode=collection_mode,
         browser_session=browser_session,
+        http_session=http_session,
     )
+    return result
+
+
+def collect_saved_list_result(
+    list_url: str,
+    *,
+    headless: bool = True,
+    timeout_ms: int = 30_000,
+    settle_time_ms: int = 3_000,
+    collection_mode: CollectionMode = DEFAULT_COLLECTION_MODE,
+    browser_session: BrowserSessionConfig | None = None,
+    http_session: HttpSessionConfig | None = None,
+) -> tuple[BrowserArtifacts, SavedList]:
+    """Collect artifacts and parse a Google Maps saved list."""
+    normalized_mode = _normalize_collection_mode(collection_mode)
+
+    if normalized_mode == "browser":
+        artifacts = collect_browser_artifacts(
+            list_url,
+            headless=headless,
+            timeout_ms=timeout_ms,
+            settle_time_ms=settle_time_ms,
+            browser_session=browser_session,
+        )
+        return artifacts, _parse_saved_list(
+            list_url,
+            artifacts=artifacts,
+        )
+
+    if normalized_mode == "curl":
+        artifacts = collect_http_artifacts(
+            list_url,
+            timeout_ms=timeout_ms,
+            http_session=http_session,
+        )
+        return artifacts, _parse_saved_list(
+            list_url,
+            artifacts=artifacts,
+        )
+
+    try:
+        artifacts = collect_http_artifacts(
+            list_url,
+            timeout_ms=timeout_ms,
+            http_session=http_session,
+        )
+        return artifacts, _parse_saved_list(
+            list_url,
+            artifacts=artifacts,
+        )
+    except (ParseError, ScrapeError):
+        artifacts = collect_browser_artifacts(
+            list_url,
+            headless=headless,
+            timeout_ms=timeout_ms,
+            settle_time_ms=settle_time_ms,
+            browser_session=browser_session,
+        )
+        return artifacts, _parse_saved_list(
+            list_url,
+            artifacts=artifacts,
+        )
+
+
+def _parse_saved_list(
+    list_url: str,
+    *,
+    artifacts: BrowserArtifacts,
+) -> SavedList:
     return parse_saved_list_artifacts(
         list_url,
         resolved_url=artifacts.resolved_url,
         runtime_state=artifacts.runtime_state,
         script_texts=artifacts.script_texts,
         html=artifacts.html,
+    )
+
+
+def collect_http_artifacts(
+    list_url: str,
+    *,
+    timeout_ms: int,
+    http_session: HttpSessionConfig | None = None,
+) -> BrowserArtifacts:
+    """Load a page over HTTP and collect runtime artifacts from preload responses."""
+    curl_requests = _import_curl_requests()
+    timeout_seconds = max(timeout_ms / 1_000, 1.0)
+    session_kwargs: dict[str, Any] = {
+        "impersonate": _HTTP_IMPERSONATE,
+        "allow_redirects": True,
+        "default_headers": True,
+        "timeout": timeout_seconds,
+    }
+    cookie_jar = _load_http_cookie_jar(http_session)
+    if cookie_jar is not None:
+        session_kwargs["cookies"] = cookie_jar
+    if http_session is not None and http_session.proxy is not None:
+        session_kwargs["proxy"] = http_session.proxy
+
+    try:
+        with curl_requests.Session(**session_kwargs) as session:
+            response = session.get(list_url)
+            _raise_for_status(response)
+            resolved_url = _normalize_response_url(getattr(response, "url", None))
+            page_html = _response_text(response)
+            script_texts = _extract_script_texts_from_html(page_html)
+            preload_url = _extract_preloaded_fetch_url(
+                page_html,
+                base_url=resolved_url or list_url,
+                preferred_path_markers=("entitylist/getlist",),
+            )
+            if preload_url is not None:
+                try:
+                    preload_response = session.get(
+                        preload_url,
+                        referer=resolved_url or list_url,
+                    )
+                    _raise_for_status(preload_response)
+                except Exception:
+                    pass
+                else:
+                    preload_text = _response_text(preload_response)
+                    if preload_text.strip():
+                        script_texts.append(preload_text)
+    except Exception as exc:  # pragma: no cover - network error path
+        raise ScrapeError(f"Failed to collect HTTP artifacts: {exc}") from exc
+    finally:
+        _save_http_cookie_jar(http_session, cookie_jar)
+
+    return BrowserArtifacts(
+        resolved_url=resolved_url,
+        runtime_state=None,
+        script_texts=script_texts,
+        html=page_html,
     )
 
 
@@ -123,7 +279,7 @@ def collect_browser_artifacts(
         page.goto(list_url, wait_until="domcontentloaded", timeout=timeout_ms)
         _handle_google_consent(page, timeout_ms=timeout_ms)
         try:
-            page.wait_for_load_state("networkidle", timeout=timeout_ms)
+            page.wait_for_load_state("load", timeout=min(timeout_ms, 10_000))
         except Exception:
             pass
         _handle_google_consent(page, timeout_ms=timeout_ms)
@@ -174,12 +330,7 @@ def _launch_browser_context(
 
 def _read_resolved_url(page: Any) -> str | None:
     value = getattr(page, "url", None)
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip()
-    if not normalized:
-        return None
-    return normalized
+    return _normalize_response_url(value)
 
 
 def _read_runtime_state(page: Any, *, timeout_ms: int) -> JSONValue | None:
@@ -230,7 +381,7 @@ def _handle_google_consent(page: Any, *, timeout_ms: int) -> None:
 
 def _settle_after_consent(page: Any, *, timeout_ms: int) -> None:
     try:
-        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        page.wait_for_load_state("load", timeout=min(timeout_ms, 10_000))
     except Exception:
         pass
     page.wait_for_timeout(1_000)
@@ -348,3 +499,106 @@ def _capture_consent_diagnostics(page: Any) -> list[Path]:
         pass
 
     return saved_paths
+
+
+def _import_curl_requests() -> Any:
+    try:
+        from curl_cffi import requests as curl_requests
+    except ImportError as exc:  # pragma: no cover - dependency error path
+        raise ScrapeError("curl_cffi is not installed. Run `uv sync`.") from exc
+    return curl_requests
+
+
+def _load_http_cookie_jar(
+    http_session: HttpSessionConfig | None,
+) -> MozillaCookieJar | None:
+    if http_session is None or http_session.cookie_jar_path is None:
+        return None
+    http_session.cookie_jar_path.parent.mkdir(parents=True, exist_ok=True)
+    cookie_jar = MozillaCookieJar(str(http_session.cookie_jar_path))
+    if http_session.cookie_jar_path.exists():
+        try:
+            cookie_jar.load(ignore_discard=True, ignore_expires=True)
+        except LoadError as exc:
+            raise ScrapeError(
+                f"Failed to load HTTP cookie jar: {http_session.cookie_jar_path}"
+            ) from exc
+    return cookie_jar
+
+
+def _save_http_cookie_jar(
+    http_session: HttpSessionConfig | None,
+    cookie_jar: MozillaCookieJar | None,
+) -> None:
+    if (
+        http_session is None
+        or http_session.cookie_jar_path is None
+        or cookie_jar is None
+    ):
+        return
+    cookie_jar.save(ignore_discard=True, ignore_expires=True)
+
+
+def _extract_script_texts_from_html(page_html: str) -> list[str]:
+    return [
+        match.group(1)
+        for match in _SCRIPT_TEXT_PATTERN.finditer(page_html)
+        if match.group(1).strip()
+    ]
+
+
+def _extract_preloaded_fetch_url(
+    page_html: str,
+    *,
+    base_url: str,
+    preferred_path_markers: tuple[str, ...] = (),
+) -> str | None:
+    candidates: list[str] = []
+    for match in _LINK_TAG_PATTERN.finditer(page_html):
+        attributes = _extract_html_attributes(match.group(0))
+        if attributes.get("as", "").strip().lower() != "fetch":
+            continue
+        href = html.unescape(attributes.get("href", ""))
+        if not href.strip() or "/maps/preview/" not in href:
+            continue
+        candidates.append(urljoin(base_url, href))
+    if not candidates:
+        return None
+    for marker in preferred_path_markers:
+        for candidate in candidates:
+            if marker in candidate:
+                return candidate
+    return candidates[0]
+
+
+def _extract_html_attributes(tag_html: str) -> dict[str, str]:
+    return {
+        name.lower(): value
+        for name, _quote, value in _HTML_ATTRIBUTE_PATTERN.findall(tag_html)
+    }
+
+
+def _normalize_response_url(value: object) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _response_text(response: Any) -> str:
+    value = getattr(response, "text", "")
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _raise_for_status(response: Any) -> None:
+    raise_for_status = getattr(response, "raise_for_status", None)
+    if callable(raise_for_status):
+        raise_for_status()
+
+
+def _normalize_collection_mode(collection_mode: CollectionMode) -> CollectionMode:
+    return collection_mode

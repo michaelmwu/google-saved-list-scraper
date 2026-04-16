@@ -3,19 +3,24 @@ from __future__ import annotations
 import re
 import tempfile
 import unittest
+from http.cookiejar import Cookie
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from google_saved_lists.scraper import (
+from gmaps_scraper.parser import ParseError
+from gmaps_scraper.scraper import (
+    BrowserArtifacts,
     BrowserSessionConfig,
+    HttpSessionConfig,
     ScrapeError,
     _handle_google_consent,
     _has_google_consent_screen,
     _launch_browser_context,
     _read_resolved_url,
-    collect_browser_artifacts,
+    collect_http_artifacts,
+    collect_saved_list_result,
 )
 
 
@@ -47,8 +52,6 @@ class _FakeContext:
         frames: list[_FakeContext] | None = None,
         allow_role_click: bool = True,
         dismiss_on_click: bool = True,
-        runtime_state: Any = None,
-        script_texts: list[str] | None = None,
     ) -> None:
         self._text = text
         self.buttons = buttons or []
@@ -56,8 +59,6 @@ class _FakeContext:
         self.frames = frames or []
         self.allow_role_click = allow_role_click
         self.dismiss_on_click = dismiss_on_click
-        self.runtime_state = runtime_state
-        self.script_texts = script_texts or []
         self.clicked: list[str] = []
         self.timeouts: list[int] = []
 
@@ -76,21 +77,12 @@ class _FakeContext:
             return False
         if "innerText" in script:
             return self._text
-        if "APP_INITIALIZATION_STATE" in script:
-            return self.runtime_state
-        if "document.scripts" in script:
-            return self.script_texts
         return None
 
     def get_by_role(self, role: str, name: re.Pattern[str]) -> _FakeLocator:
         if role != "button":
             raise RuntimeError("Unexpected role")
         return _FakeLocator(self, name)
-
-    def goto(self, url: str, wait_until: str, timeout: int) -> None:
-        del wait_until, timeout
-        if not self.url:
-            self.url = url
 
     def wait_for_timeout(self, milliseconds: int) -> None:
         self.timeouts.append(milliseconds)
@@ -112,16 +104,64 @@ class _FakeContext:
         self.url = ""
 
 
-class _FakeBrowserContext:
-    def __init__(self, page: _FakeContext) -> None:
-        self._page = page
-        self.closed = False
+class _FakeHttpResponse:
+    def __init__(self, *, text: str, url: str) -> None:
+        self.text = text
+        self.url = url
 
-    def new_page(self) -> _FakeContext:
-        return self._page
+    def raise_for_status(self) -> None:
+        return None
 
-    def close(self) -> None:
-        self.closed = True
+
+class _FakeHttpSession:
+    def __init__(self, responses: list[_FakeHttpResponse], **kwargs: Any) -> None:
+        self._responses = responses
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.kwargs = kwargs
+
+    def __enter__(self) -> _FakeHttpSession:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, exc, tb
+
+    def get(self, url: str, **kwargs: Any) -> _FakeHttpResponse:
+        self.calls.append((url, kwargs))
+        cookie_jar = self.kwargs.get("cookies")
+        if cookie_jar is not None:
+            cookie_jar.set_cookie(
+                Cookie(
+                    version=0,
+                    name="sid",
+                    value="123",
+                    port=None,
+                    port_specified=False,
+                    domain="www.google.com",
+                    domain_specified=True,
+                    domain_initial_dot=False,
+                    path="/",
+                    path_specified=True,
+                    secure=False,
+                    expires=None,
+                    discard=True,
+                    comment=None,
+                    comment_url=None,
+                    rest={},
+                    rfc2109=False,
+                )
+            )
+        return self._responses.pop(0)
+
+
+class _FakeCurlRequests:
+    def __init__(self, responses: list[_FakeHttpResponse]) -> None:
+        self._responses = responses
+        self.sessions: list[_FakeHttpSession] = []
+
+    def Session(self, **kwargs: Any) -> _FakeHttpSession:
+        session = _FakeHttpSession(self._responses, **kwargs)
+        self.sessions.append(session)
+        return session
 
 
 class ScraperConsentTests(unittest.TestCase):
@@ -159,10 +199,7 @@ class ScraperConsentTests(unittest.TestCase):
         launched: list[tuple[Path, dict[str, Any]]] = []
         expected_context = object()
 
-        def fake_launch_persistent_context(
-            profile_dir: Path,
-            **kwargs: Any,
-        ) -> object:
+        def fake_launch_persistent_context(profile_dir: Path, **kwargs: Any) -> object:
             launched.append((profile_dir, kwargs))
             return expected_context
 
@@ -197,31 +234,6 @@ class ScraperConsentTests(unittest.TestCase):
                 )
             ],
         )
-
-    def test_collect_browser_artifacts_closes_context(self) -> None:
-        page = _FakeContext(
-            text="",
-            url="https://www.google.com/maps/@30.5370705,125.4120472,6z/data=!4m3!11m2!2sUGEPbA20Qd-OH4uoWjmDgQ!3e3?entry=ttu",
-            runtime_state=["runtime"],
-            script_texts=["script"],
-        )
-        context = _FakeBrowserContext(page)
-
-        with patch("google_saved_lists.scraper._launch_browser_context", return_value=context):
-            artifacts = collect_browser_artifacts(
-                "https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18",
-                headless=True,
-                timeout_ms=5_000,
-                settle_time_ms=0,
-            )
-
-        self.assertTrue(context.closed)
-        self.assertEqual(
-            artifacts.resolved_url,
-            "https://www.google.com/maps/@30.5370705,125.4120472,6z/data=!4m3!11m2!2sUGEPbA20Qd-OH4uoWjmDgQ!3e3?entry=ttu",
-        )
-        self.assertEqual(artifacts.runtime_state, ["runtime"])
-        self.assertEqual(artifacts.script_texts, ["script"])
 
     def test_reads_resolved_url_from_page(self) -> None:
         page = _FakeContext(
@@ -278,10 +290,399 @@ class ScraperConsentTests(unittest.TestCase):
             dismiss_on_click=False,
         )
 
-        with patch("google_saved_lists.scraper._capture_consent_diagnostics", return_value=[]):
+        with patch("gmaps_scraper.scraper._capture_consent_diagnostics", return_value=[]):
             with self.assertRaises(ScrapeError):
                 _handle_google_consent(page, timeout_ms=5_000)
 
+
+class HttpArtifactTests(unittest.TestCase):
+    def test_collect_http_artifacts_fetches_preloaded_payload(self) -> None:
+        fake_requests = _FakeCurlRequests(
+            responses=[
+                _FakeHttpResponse(
+                    text=(
+                        "<html><head>"
+                        '<link href="/maps/preview/entitylist/getlist?pb=123" '
+                        'as="fetch" rel="preload">'
+                        '<script>window.APP_INITIALIZATION_STATE=["inline"];</script>'
+                        "</head></html>"
+                    ),
+                    url="https://www.google.com/maps/@/data=!3m1!4b1",
+                ),
+                _FakeHttpResponse(
+                    text=")]}'\n[[\"payload\"]]",
+                    url="https://www.google.com/maps/preview/entitylist/getlist?pb=123",
+                ),
+            ]
+        )
+
+        with patch(
+            "gmaps_scraper.scraper._import_curl_requests",
+            return_value=fake_requests,
+        ):
+            artifacts = collect_http_artifacts(
+                "https://maps.app.goo.gl/example",
+                timeout_ms=15_000,
+                http_session=None,
+            )
+
+        self.assertEqual(artifacts.resolved_url, "https://www.google.com/maps/@/data=!3m1!4b1")
+        self.assertEqual(
+            artifacts.script_texts,
+            ['window.APP_INITIALIZATION_STATE=["inline"];', ")]}'\n[[\"payload\"]]"],
+        )
+        self.assertIn("/maps/preview/entitylist/getlist?pb=123", artifacts.html)
+
+        session = fake_requests.sessions[0]
+        self.assertEqual(session.kwargs["impersonate"], "chrome")
+        self.assertEqual(session.calls[0][0], "https://maps.app.goo.gl/example")
+        self.assertEqual(
+            session.calls[1][0],
+            "https://www.google.com/maps/preview/entitylist/getlist?pb=123",
+        )
+
+    def test_collect_http_artifacts_returns_html_without_preload(self) -> None:
+        fake_requests = _FakeCurlRequests(
+            responses=[
+                _FakeHttpResponse(
+                    text=(
+                        "<html><body>No preload here</body>"
+                        "<script>const value = 1;</script></html>"
+                    ),
+                    url="https://www.google.com/maps",
+                )
+            ]
+        )
+
+        with patch(
+            "gmaps_scraper.scraper._import_curl_requests",
+            return_value=fake_requests,
+        ):
+            artifacts = collect_http_artifacts(
+                "https://maps.app.goo.gl/example",
+                timeout_ms=15_000,
+                http_session=None,
+            )
+
+        self.assertEqual(artifacts.resolved_url, "https://www.google.com/maps")
+        self.assertEqual(artifacts.script_texts, ["const value = 1;"])
+
+    def test_collect_http_artifacts_fetches_preload_with_attributes_in_any_order(self) -> None:
+        fake_requests = _FakeCurlRequests(
+            responses=[
+                _FakeHttpResponse(
+                    text=(
+                        "<html><head>"
+                        "<link rel='preload' as='fetch' "
+                        "href='/maps/preview/entitylist/getlist?pb=123'>"
+                        "</head></html>"
+                    ),
+                    url="https://www.google.com/maps/@/data=!3m1!4b1",
+                ),
+                _FakeHttpResponse(
+                    text=")]}'\n[[\"payload\"]]",
+                    url="https://www.google.com/maps/preview/entitylist/getlist?pb=123",
+                ),
+            ]
+        )
+
+        with patch(
+            "gmaps_scraper.scraper._import_curl_requests",
+            return_value=fake_requests,
+        ):
+            artifacts = collect_http_artifacts(
+                "https://maps.app.goo.gl/example",
+                timeout_ms=15_000,
+                http_session=None,
+            )
+
+        self.assertEqual(artifacts.script_texts, [")]}'\n[[\"payload\"]]"])
+        session = fake_requests.sessions[0]
+        self.assertEqual(
+            session.calls[1][0],
+            "https://www.google.com/maps/preview/entitylist/getlist?pb=123",
+        )
+
+    def test_collect_http_artifacts_prefers_entitylist_over_other_preview_links(self) -> None:
+        fake_requests = _FakeCurlRequests(
+            responses=[
+                _FakeHttpResponse(
+                    text=(
+                        "<html><head>"
+                        '<link rel="preload" as="fetch" href="/maps/preview/log204?foo=1">'
+                        '<link rel="preload" as="fetch" '
+                        'href="/maps/preview/entitylist/getlist?pb=123">'
+                        "</head></html>"
+                    ),
+                    url="https://www.google.com/maps/@/data=!3m1!4b1",
+                ),
+                _FakeHttpResponse(
+                    text=")]}'\n[[\"payload\"]]",
+                    url="https://www.google.com/maps/preview/entitylist/getlist?pb=123",
+                ),
+            ]
+        )
+
+        with patch(
+            "gmaps_scraper.scraper._import_curl_requests",
+            return_value=fake_requests,
+        ):
+            artifacts = collect_http_artifacts(
+                "https://maps.app.goo.gl/example",
+                timeout_ms=15_000,
+                http_session=None,
+            )
+
+        self.assertEqual(artifacts.script_texts, [")]}'\n[[\"payload\"]]"])
+        session = fake_requests.sessions[0]
+        self.assertEqual(
+            session.calls[1][0],
+            "https://www.google.com/maps/preview/entitylist/getlist?pb=123",
+        )
+
+    def test_collect_http_artifacts_uses_http_session_proxy_and_cookie_jar(self) -> None:
+        fake_requests = _FakeCurlRequests(
+            responses=[
+                _FakeHttpResponse(
+                    text="<html><body>No preload here</body></html>",
+                    url="https://www.google.com/maps",
+                )
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cookie_jar_path = Path(tmp_dir) / "cookies.txt"
+            with patch(
+                "gmaps_scraper.scraper._import_curl_requests",
+                return_value=fake_requests,
+            ):
+                collect_http_artifacts(
+                    "https://maps.app.goo.gl/example",
+                    timeout_ms=15_000,
+                    http_session=HttpSessionConfig(
+                        cookie_jar_path=cookie_jar_path,
+                        proxy="http://proxy.example:8080",
+                    ),
+                )
+
+            session = fake_requests.sessions[0]
+            self.assertEqual(session.kwargs["proxy"], "http://proxy.example:8080")
+            self.assertTrue(cookie_jar_path.is_file())
+            self.assertIn("sid", cookie_jar_path.read_text(encoding="utf-8"))
+
+
+class SavedListFallbackTests(unittest.TestCase):
+    def test_collect_saved_list_result_prefers_http_when_parse_succeeds(self) -> None:
+        http_artifacts = BrowserArtifacts(
+            resolved_url="https://www.google.com/maps/@/data=!3m1!4b1",
+            runtime_state=None,
+            script_texts=["http-script"],
+            html="<html></html>",
+        )
+        parsed = Mock()
+
+        with (
+            patch("gmaps_scraper.scraper.collect_http_artifacts", return_value=http_artifacts),
+            patch(
+                "gmaps_scraper.scraper.collect_browser_artifacts"
+            ) as collect_browser_artifacts,
+            patch("gmaps_scraper.scraper.parse_saved_list_artifacts", return_value=parsed),
+        ):
+            artifacts, result = collect_saved_list_result("https://maps.app.goo.gl/example")
+
+        self.assertIs(artifacts, http_artifacts)
+        self.assertIs(result, parsed)
+        collect_browser_artifacts.assert_not_called()
+
+    def test_collect_saved_list_result_uses_http_only_mode(self) -> None:
+        http_artifacts = BrowserArtifacts(
+            resolved_url="https://www.google.com/maps/@/data=!3m1!4b1",
+            runtime_state=None,
+            script_texts=["http-script"],
+            html="<html></html>",
+        )
+        parsed = Mock()
+
+        with (
+            patch("gmaps_scraper.scraper.collect_http_artifacts", return_value=http_artifacts),
+            patch(
+                "gmaps_scraper.scraper.collect_browser_artifacts"
+            ) as collect_browser_artifacts,
+            patch("gmaps_scraper.scraper.parse_saved_list_artifacts", return_value=parsed),
+        ):
+            artifacts, result = collect_saved_list_result(
+                "https://maps.app.goo.gl/example",
+                collection_mode="curl",
+            )
+
+        self.assertIs(artifacts, http_artifacts)
+        self.assertIs(result, parsed)
+        collect_browser_artifacts.assert_not_called()
+
+    def test_collect_saved_list_result_falls_back_to_browser_after_http_parse_error(self) -> None:
+        http_artifacts = BrowserArtifacts(
+            resolved_url="https://www.google.com/maps/@/data=!3m1!4b1",
+            runtime_state=None,
+            script_texts=["http-script"],
+            html="<html></html>",
+        )
+        browser_artifacts = BrowserArtifacts(
+            resolved_url="https://www.google.com/maps/@/data=!3m1!4b1",
+            runtime_state=["browser-runtime"],
+            script_texts=["browser-script"],
+            html="<html></html>",
+        )
+        parsed = Mock()
+
+        with (
+            patch("gmaps_scraper.scraper.collect_http_artifacts", return_value=http_artifacts),
+            patch(
+                "gmaps_scraper.scraper.collect_browser_artifacts",
+                return_value=browser_artifacts,
+            ) as collect_browser_artifacts,
+            patch(
+                "gmaps_scraper.scraper.parse_saved_list_artifacts",
+                side_effect=[ParseError("bad http payload"), parsed],
+            ),
+        ):
+            artifacts, result = collect_saved_list_result("https://maps.app.goo.gl/example")
+
+        self.assertIs(artifacts, browser_artifacts)
+        self.assertIs(result, parsed)
+        collect_browser_artifacts.assert_called_once()
+
+    def test_collect_saved_list_result_uses_browser_only_mode(self) -> None:
+        browser_artifacts = BrowserArtifacts(
+            resolved_url="https://www.google.com/maps/@/data=!3m1!4b1",
+            runtime_state=["browser-runtime"],
+            script_texts=["browser-script"],
+            html="<html></html>",
+        )
+        parsed = Mock()
+
+        with (
+            patch("gmaps_scraper.scraper.collect_http_artifacts") as collect_http_artifacts,
+            patch(
+                "gmaps_scraper.scraper.collect_browser_artifacts",
+                return_value=browser_artifacts,
+            ) as collect_browser_artifacts,
+            patch("gmaps_scraper.scraper.parse_saved_list_artifacts", return_value=parsed),
+        ):
+            artifacts, result = collect_saved_list_result(
+                "https://maps.app.goo.gl/example",
+                collection_mode="browser",
+            )
+
+        self.assertIs(artifacts, browser_artifacts)
+        self.assertIs(result, parsed)
+        collect_http_artifacts.assert_not_called()
+        collect_browser_artifacts.assert_called_once()
+
+    def test_browser_only_mode_preserves_headless_setting(self) -> None:
+        browser_artifacts = BrowserArtifacts(
+            resolved_url="https://www.google.com/maps/@/data=!3m1!4b1",
+            runtime_state=["browser-runtime"],
+            script_texts=["browser-script"],
+            html="<html></html>",
+        )
+        parsed = Mock()
+
+        with (
+            patch("gmaps_scraper.scraper.collect_http_artifacts") as collect_http_artifacts,
+            patch(
+                "gmaps_scraper.scraper.collect_browser_artifacts",
+                return_value=browser_artifacts,
+            ) as collect_browser_artifacts,
+            patch("gmaps_scraper.scraper.parse_saved_list_artifacts", return_value=parsed),
+        ):
+            artifacts, result = collect_saved_list_result(
+                "https://maps.app.goo.gl/example",
+                headless=False,
+                collection_mode="browser",
+            )
+
+        self.assertIs(artifacts, browser_artifacts)
+        self.assertIs(result, parsed)
+        collect_http_artifacts.assert_not_called()
+        collect_browser_artifacts.assert_called_once_with(
+            "https://maps.app.goo.gl/example",
+            headless=False,
+            timeout_ms=30_000,
+            settle_time_ms=3_000,
+            browser_session=None,
+        )
+
+    def test_browser_session_reaches_browser_fallback_path(self) -> None:
+        browser_artifacts = BrowserArtifacts(
+            resolved_url="https://www.google.com/maps/@/data=!3m1!4b1",
+            runtime_state=["browser-runtime"],
+            script_texts=["browser-script"],
+            html="<html></html>",
+        )
+        parsed = Mock()
+        browser_session = BrowserSessionConfig(
+            profile_dir=Path("/tmp/example-session"),
+            proxy="http://proxy.example:8080",
+        )
+
+        with (
+            patch(
+                "gmaps_scraper.scraper.collect_http_artifacts",
+                side_effect=ScrapeError("bad http"),
+            ),
+            patch(
+                "gmaps_scraper.scraper.collect_browser_artifacts",
+                return_value=browser_artifacts,
+            ) as collect_browser_artifacts,
+            patch("gmaps_scraper.scraper.parse_saved_list_artifacts", return_value=parsed),
+        ):
+            artifacts, result = collect_saved_list_result(
+                "https://maps.app.goo.gl/example",
+                collection_mode="auto",
+                browser_session=browser_session,
+            )
+
+        self.assertIs(artifacts, browser_artifacts)
+        self.assertIs(result, parsed)
+        collect_browser_artifacts.assert_called_once_with(
+            "https://maps.app.goo.gl/example",
+            headless=True,
+            timeout_ms=30_000,
+            settle_time_ms=3_000,
+            browser_session=browser_session,
+        )
+
+    def test_http_session_reaches_http_collectors(self) -> None:
+        http_artifacts = BrowserArtifacts(
+            resolved_url="https://www.google.com/maps/@/data=!3m1!4b1",
+            runtime_state=None,
+            script_texts=["http-script"],
+            html="<html></html>",
+        )
+        parsed = Mock()
+        http_session = HttpSessionConfig(
+            cookie_jar_path=Path("/tmp/http-cookies.txt"),
+            proxy="http://proxy.example:8080",
+        )
+
+        with (
+            patch("gmaps_scraper.scraper.collect_http_artifacts", return_value=http_artifacts)
+            as collect_http_artifacts_mock,
+            patch("gmaps_scraper.scraper.parse_saved_list_artifacts", return_value=parsed),
+        ):
+            artifacts, result = collect_saved_list_result(
+                "https://maps.app.goo.gl/example",
+                collection_mode="curl",
+                http_session=http_session,
+            )
+
+        self.assertIs(artifacts, http_artifacts)
+        self.assertIs(result, parsed)
+        collect_http_artifacts_mock.assert_called_once_with(
+            "https://maps.app.goo.gl/example",
+            timeout_ms=30_000,
+            http_session=http_session,
+        )
 
 if __name__ == "__main__":
     unittest.main()
