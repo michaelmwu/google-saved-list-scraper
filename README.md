@@ -90,12 +90,15 @@ Available CLI options:
 - `--settle-ms INTEGER` adds extra wait time after the page loads
 - `--session-dir PATH` reuses a persistent browser profile and its cookies
 - `--proxy URL` passes a proxy URL through to the browser launch
+  Prefer `GOOGLE_SAVED_LISTS_PROXY` for authenticated proxies so credentials do
+  not appear in shell history or process listings.
 
 ## Library Usage
 
 Import the package directly in application code:
 
 ```python
+import os
 from pathlib import Path
 
 from google_saved_lists import BrowserSessionConfig, scrape_saved_list
@@ -104,7 +107,7 @@ result = scrape_saved_list(
     "https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18",
     browser_session=BrowserSessionConfig(
         profile_dir=Path(".google-saved-lists/session"),
-        proxy="http://user:pass@proxy.example:8080",
+        proxy=os.environ["GOOGLE_SAVED_LISTS_PROXY"],
     ),
 )
 

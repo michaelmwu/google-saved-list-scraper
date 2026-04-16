@@ -46,7 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--proxy",
-        help="Proxy URL passed through to the browser, for example http://user:pass@host:port.",
+        default=os.environ.get("GOOGLE_SAVED_LISTS_PROXY"),
+        help=(
+            "Proxy URL passed through to the browser. Prefer "
+            "GOOGLE_SAVED_LISTS_PROXY for authenticated proxies so credentials "
+            "do not appear in shell history or process listings."
+        ),
     )
     parser.add_argument(
         "--debug-output-dir",

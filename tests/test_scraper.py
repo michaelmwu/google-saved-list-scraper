@@ -89,7 +89,8 @@ class _FakeContext:
 
     def goto(self, url: str, wait_until: str, timeout: int) -> None:
         del wait_until, timeout
-        self.url = url
+        if not self.url:
+            self.url = url
 
     def wait_for_timeout(self, milliseconds: int) -> None:
         self.timeouts.append(milliseconds)
@@ -215,7 +216,10 @@ class ScraperConsentTests(unittest.TestCase):
             )
 
         self.assertTrue(context.closed)
-        self.assertEqual(artifacts.resolved_url, "https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18")
+        self.assertEqual(
+            artifacts.resolved_url,
+            "https://www.google.com/maps/@30.5370705,125.4120472,6z/data=!4m3!11m2!2sUGEPbA20Qd-OH4uoWjmDgQ!3e3?entry=ttu",
+        )
         self.assertEqual(artifacts.runtime_state, ["runtime"])
         self.assertEqual(artifacts.script_texts, ["script"])
 

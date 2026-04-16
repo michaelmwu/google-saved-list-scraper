@@ -135,6 +135,38 @@ class CliTests(unittest.TestCase):
                 html=artifacts.html,
             )
 
+    def test_uses_proxy_from_environment(self) -> None:
+        artifacts = _artifacts()
+        parsed_payload = _parsed_payload()
+
+        with (
+            patch(
+                "sys.argv",
+                ["google-saved-lists", "https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18"],
+            ),
+            patch.dict("os.environ", {"GOOGLE_SAVED_LISTS_PROXY": "http://proxy.example:8080"}),
+            patch(
+                "google_saved_lists.cli.collect_browser_artifacts",
+                return_value=artifacts,
+            ) as collect_browser_artifacts,
+            patch("google_saved_lists.cli.parse_saved_list_artifacts") as parse_saved_list,
+        ):
+            parse_saved_list.return_value.to_dict.return_value = parsed_payload
+
+            exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        collect_browser_artifacts.assert_called_once_with(
+            "https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18",
+            headless=True,
+            timeout_ms=30_000,
+            settle_time_ms=3_000,
+            browser_session=BrowserSessionConfig(
+                profile_dir=None,
+                proxy="http://proxy.example:8080",
+            ),
+        )
+
     def test_debug_output_dir_writes_dump_and_stdout_payload(self) -> None:
         artifacts = _artifacts()
         parsed_payload = _parsed_payload()
