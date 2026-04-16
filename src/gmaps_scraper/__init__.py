@@ -3,7 +3,12 @@
 from gmaps_scraper.models import Place, PlaceDetails, SavedList
 from gmaps_scraper.parser import ParseError, parse_saved_list_artifacts
 from gmaps_scraper.place_scraper import scrape_place
-from gmaps_scraper.scraper import ScrapeError, scrape_saved_list
+from gmaps_scraper.scraper import (
+    BrowserProxyConfig,
+    BrowserSessionConfig,
+    ScrapeError,
+    scrape_saved_list,
+)
 from gmaps_scraper.url_tools import (
     PLACELIST_URL_MARKER,
     extract_list_id,
@@ -13,6 +18,8 @@ from gmaps_scraper.url_tools import (
 
 __all__ = [
     "PLACELIST_URL_MARKER",
+    "BrowserProxyConfig",
+    "BrowserSessionConfig",
     "ParseError",
     "Place",
     "PlaceDetails",

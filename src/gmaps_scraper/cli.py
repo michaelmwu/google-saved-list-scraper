@@ -9,7 +9,11 @@ from pathlib import Path
 
 from gmaps_scraper.debug_dump import write_debug_dump
 from gmaps_scraper.place_scraper import scrape_place
-from gmaps_scraper.scraper import DEFAULT_COLLECTION_MODE, collect_saved_list_result
+from gmaps_scraper.scraper import (
+    DEFAULT_COLLECTION_MODE,
+    BrowserSessionConfig,
+    collect_saved_list_result,
+)
 from gmaps_scraper.url_tools import extract_list_id
 
 _DEFAULT_DEBUG_DIR_NAME = ".gmaps-debug"
@@ -56,6 +60,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--session-dir",
+        type=Path,
+        help="Reuse a persistent browser profile stored in this directory.",
+    )
+    parser.add_argument(
+        "--proxy",
+        default=os.environ.get("GMAPS_SCRAPER_PROXY"),
+        help=(
+            "Proxy URL passed through to the browser. Prefer "
+            "GMAPS_SCRAPER_PROXY for authenticated proxies so credentials "
+            "do not appear in shell history or process listings."
+        ),
+    )
+    parser.add_argument(
         "--debug-output-dir",
         type=Path,
         help=(
@@ -78,6 +96,12 @@ def main() -> int:
     """Run the CLI."""
     parser = build_parser()
     args = parser.parse_args()
+    browser_session = None
+    if args.session_dir is not None or args.proxy is not None:
+        browser_session = BrowserSessionConfig(
+            profile_dir=args.session_dir,
+            proxy=args.proxy,
+        )
 
     if args.kind == "place":
         if args.collection_mode == "curl":
@@ -92,6 +116,7 @@ def main() -> int:
             headless=not args.show_browser_window,
             timeout_ms=args.timeout_ms,
             settle_time_ms=args.settle_ms,
+            browser_session=browser_session,
         )
         payload = json.dumps(place_result.to_dict(), indent=2, ensure_ascii=False)
         if args.output is not None:
@@ -106,6 +131,7 @@ def main() -> int:
         timeout_ms=args.timeout_ms,
         settle_time_ms=args.settle_ms,
         collection_mode=args.collection_mode,
+        browser_session=browser_session,
     )
     debug_output_dir = _resolve_debug_output_dir(
         list_url=args.url,

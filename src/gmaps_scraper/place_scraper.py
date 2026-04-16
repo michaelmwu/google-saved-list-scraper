@@ -11,10 +11,12 @@ from urllib.parse import parse_qs, unquote, urlparse
 from gmaps_scraper.models import PlaceDetails
 from gmaps_scraper.scraper import (
     _HTTP_IMPERSONATE,
+    BrowserSessionConfig,
     ScrapeError,
     _extract_preloaded_fetch_url,
     _handle_google_consent,
     _import_curl_requests,
+    _launch_browser_context,
     _normalize_response_url,
     _raise_for_status,
     _response_text,
@@ -260,6 +262,7 @@ def scrape_place(
     headless: bool = True,
     timeout_ms: int = 30_000,
     settle_time_ms: int = 3_000,
+    browser_session: BrowserSessionConfig | None = None,
 ) -> PlaceDetails:
     """Scrape a Google Maps place page using a browser session."""
     snapshot = collect_place_snapshot(
@@ -267,6 +270,7 @@ def scrape_place(
         headless=headless,
         timeout_ms=timeout_ms,
         settle_time_ms=settle_time_ms,
+        browser_session=browser_session,
     )
     resolved_url = _normalize_response_url(snapshot.get("resolved_url"))
     dom_snapshot = cast(Mapping[str, object], snapshot["dom"])
@@ -288,16 +292,15 @@ def collect_place_snapshot(
     headless: bool,
     timeout_ms: int,
     settle_time_ms: int,
+    browser_session: BrowserSessionConfig | None = None,
 ) -> dict[str, object]:
     """Collect a normalized DOM snapshot for a Google Maps place page."""
+    context = _launch_browser_context(
+        headless=headless,
+        browser_session=browser_session,
+    )
     try:
-        from cloakbrowser import launch  # type: ignore[import-untyped]
-    except ImportError as exc:  # pragma: no cover - dependency error path
-        raise ScrapeError("CloakBrowser is not installed. Run `uv sync`.") from exc
-
-    browser = launch(headless=headless, humanize=True)
-    try:
-        page = browser.new_page()
+        page = context.new_page()
         _seed_google_consent_cookies(page, source_url=place_url)
         page.goto(place_url, wait_until="domcontentloaded", timeout=timeout_ms)
         _handle_google_consent(page, timeout_ms=timeout_ms)
@@ -322,7 +325,7 @@ def collect_place_snapshot(
     except Exception as exc:  # pragma: no cover - browser error path
         raise ScrapeError(f"Failed to scrape place page: {exc}") from exc
     finally:
-        browser.close()
+        context.close()
 
     if not isinstance(dom_snapshot, Mapping):
         raise ScrapeError("Failed to collect a structured place snapshot from the page.")

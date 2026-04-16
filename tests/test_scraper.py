@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import re
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock, patch
 
 from gmaps_scraper.parser import ParseError
 from gmaps_scraper.scraper import (
     BrowserArtifacts,
+    BrowserSessionConfig,
     ScrapeError,
     _handle_google_consent,
     _has_google_consent_screen,
+    _launch_browser_context,
     _read_resolved_url,
     collect_http_artifacts,
     collect_saved_list_result,
@@ -135,6 +140,76 @@ class _FakeCurlRequests:
 
 
 class ScraperConsentTests(unittest.TestCase):
+    def test_launches_ephemeral_context_without_profile_dir(self) -> None:
+        launched: list[dict[str, Any]] = []
+        expected_context = object()
+
+        def fake_launch_context(**kwargs: Any) -> object:
+            launched.append(kwargs)
+            return expected_context
+
+        fake_module = SimpleNamespace(
+            launch_context=fake_launch_context,
+            launch_persistent_context=lambda *_args, **_kwargs: None,
+        )
+
+        with patch.dict("sys.modules", {"cloakbrowser": fake_module}):
+            context = _launch_browser_context(
+                headless=False,
+                browser_session=BrowserSessionConfig(),
+            )
+
+        self.assertIs(context, expected_context)
+        self.assertEqual(
+            launched,
+            [
+                {
+                    "headless": False,
+                    "humanize": True,
+                }
+            ],
+        )
+
+    def test_launches_persistent_context_with_profile_dir_and_proxy(self) -> None:
+        launched: list[tuple[Path, dict[str, Any]]] = []
+        expected_context = object()
+
+        def fake_launch_persistent_context(profile_dir: Path, **kwargs: Any) -> object:
+            launched.append((profile_dir, kwargs))
+            return expected_context
+
+        fake_module = SimpleNamespace(
+            launch_context=lambda **_kwargs: None,
+            launch_persistent_context=fake_launch_persistent_context,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            profile_dir = Path(tmp_dir) / "session"
+            with patch.dict("sys.modules", {"cloakbrowser": fake_module}):
+                context = _launch_browser_context(
+                    headless=True,
+                    browser_session=BrowserSessionConfig(
+                        profile_dir=profile_dir,
+                        proxy="http://proxy.example:8080",
+                    ),
+                )
+            self.assertTrue(profile_dir.is_dir())
+
+        self.assertIs(context, expected_context)
+        self.assertEqual(
+            launched,
+            [
+                (
+                    profile_dir,
+                    {
+                        "headless": True,
+                        "humanize": True,
+                        "proxy": "http://proxy.example:8080",
+                    },
+                )
+            ],
+        )
+
     def test_reads_resolved_url_from_page(self) -> None:
         page = _FakeContext(
             text="",
@@ -404,6 +479,47 @@ class SavedListFallbackTests(unittest.TestCase):
             headless=False,
             timeout_ms=30_000,
             settle_time_ms=3_000,
+            browser_session=None,
+        )
+
+    def test_browser_session_reaches_browser_fallback_path(self) -> None:
+        browser_artifacts = BrowserArtifacts(
+            resolved_url="https://www.google.com/maps/@/data=!3m1!4b1",
+            runtime_state=["browser-runtime"],
+            script_texts=["browser-script"],
+            html="<html></html>",
+        )
+        parsed = Mock()
+        browser_session = BrowserSessionConfig(
+            profile_dir=Path("/tmp/example-session"),
+            proxy="http://proxy.example:8080",
+        )
+
+        with (
+            patch(
+                "gmaps_scraper.scraper.collect_http_artifacts",
+                side_effect=ScrapeError("bad http"),
+            ),
+            patch(
+                "gmaps_scraper.scraper.collect_browser_artifacts",
+                return_value=browser_artifacts,
+            ) as collect_browser_artifacts,
+            patch("gmaps_scraper.scraper.parse_saved_list_artifacts", return_value=parsed),
+        ):
+            artifacts, result = collect_saved_list_result(
+                "https://maps.app.goo.gl/example",
+                collection_mode="auto",
+                browser_session=browser_session,
+            )
+
+        self.assertIs(artifacts, browser_artifacts)
+        self.assertIs(result, parsed)
+        collect_browser_artifacts.assert_called_once_with(
+            "https://maps.app.goo.gl/example",
+            headless=True,
+            timeout_ms=30_000,
+            settle_time_ms=3_000,
+            browser_session=browser_session,
         )
 
 if __name__ == "__main__":

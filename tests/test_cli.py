@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 from gmaps_scraper.cli import main
 from gmaps_scraper.models import PlaceDetails
-from gmaps_scraper.scraper import BrowserArtifacts
+from gmaps_scraper.scraper import BrowserArtifacts, BrowserSessionConfig
 
 
 def _artifacts() -> BrowserArtifacts:
@@ -73,6 +73,7 @@ class CliTests(unittest.TestCase):
             timeout_ms=30_000,
             settle_time_ms=3_000,
             collection_mode="auto",
+            browser_session=None,
         )
 
     def test_writes_output_file_and_forwards_cli_flags(self) -> None:
@@ -95,6 +96,10 @@ class CliTests(unittest.TestCase):
                         "45000",
                         "--settle-ms",
                         "5000",
+                        "--session-dir",
+                        str(Path(tmp_dir) / "session"),
+                        "--proxy",
+                        "http://proxy.example:8080",
                     ],
                 ),
                 patch(
@@ -115,6 +120,10 @@ class CliTests(unittest.TestCase):
                 timeout_ms=45_000,
                 settle_time_ms=5_000,
                 collection_mode="auto",
+                browser_session=BrowserSessionConfig(
+                    profile_dir=Path(tmp_dir) / "session",
+                    proxy="http://proxy.example:8080",
+                ),
             )
 
     def test_forwards_explicit_collection_mode(self) -> None:
@@ -149,6 +158,7 @@ class CliTests(unittest.TestCase):
             timeout_ms=30_000,
             settle_time_ms=3_000,
             collection_mode="browser",
+            browser_session=None,
         )
 
     def test_place_kind_calls_place_scraper(self) -> None:
@@ -194,8 +204,42 @@ class CliTests(unittest.TestCase):
             headless=True,
             timeout_ms=30_000,
             settle_time_ms=3_000,
+            browser_session=None,
         )
         collect_saved_list_result.assert_not_called()
+
+    def test_uses_proxy_from_environment_for_list_scrapes(self) -> None:
+        stdout = io.StringIO()
+        artifacts = _artifacts()
+        parsed_payload = _parsed_payload()
+        result = _result(parsed_payload)
+
+        with (
+            patch(
+                "sys.argv",
+                ["gmaps-scraper", "https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18"],
+            ),
+            patch.dict("os.environ", {"GMAPS_SCRAPER_PROXY": "http://proxy.example:8080"}),
+            patch(
+                "gmaps_scraper.cli.collect_saved_list_result",
+                return_value=(artifacts, result),
+            ) as collect_saved_list_result,
+            redirect_stdout(stdout),
+        ):
+            exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        collect_saved_list_result.assert_called_once_with(
+            "https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18",
+            headless=True,
+            timeout_ms=30_000,
+            settle_time_ms=3_000,
+            collection_mode="auto",
+            browser_session=BrowserSessionConfig(
+                profile_dir=None,
+                proxy="http://proxy.example:8080",
+            ),
+        )
 
     def test_debug_output_dir_writes_dump_and_stdout_payload(self) -> None:
         artifacts = _artifacts()

@@ -80,6 +80,8 @@ Available CLI options:
 - `--output PATH` writes the JSON result to a file
 - `--headed` runs the browser in headed mode
 - `--fetch-mode {auto,curl,browser}` selects the transport path
+- `--session-dir PATH` reuses a persistent browser profile
+- `--proxy URL` sends browser traffic through a proxy
 - `--timeout-ms INTEGER` controls the navigation timeout
 - `--settle-ms INTEGER` adds extra wait time after the page loads
 
@@ -88,9 +90,16 @@ Available CLI options:
 Import the package directly in application code:
 
 ```python
-from gmaps_scraper import scrape_place, scrape_saved_list
+from pathlib import Path
 
-result = scrape_saved_list("https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18")
+from gmaps_scraper import BrowserSessionConfig, scrape_place, scrape_saved_list
+
+result = scrape_saved_list(
+    "https://maps.app.goo.gl/MG2Vd5pWBkL7hXL18",
+    browser_session=BrowserSessionConfig(
+        profile_dir=Path(".gmaps-scraper/session"),
+    ),
+)
 place = scrape_place("https://www.google.com/maps/place/Den/@35.6731762,139.7127216,17z")
 
 print(result.list_id)
@@ -102,6 +111,8 @@ print(place.review_count)
 
 Public top-level imports intended for consumers:
 
+- `BrowserProxyConfig`
+- `BrowserSessionConfig`
 - `scrape_saved_list`
 - `scrape_place`
 - `parse_saved_list_artifacts`
@@ -113,7 +124,7 @@ Public top-level imports intended for consumers:
 
 ## Output
 
-The scraper returns a `SavedList` object. `to_dict()` produces JSON like this:
+A saved list result looks like this:
 
 ```json
 {
@@ -149,6 +160,11 @@ For place pages, the scraper returns a `PlaceDetails` object with fields such as
 - Place pages currently use the browser path and extract review metadata from the
   rendered DOM.
 - Browser automation remains available for debugging, consent flows, and fallback.
+- By default each scrape uses a fresh browser session. Reuse a profile directory only
+  when you want cookies, localStorage, and other browser state to persist across runs.
+- Session rotation, clearing blocked profiles, and coordinating proxies across many
+  scraping identities are caller-level policy decisions. The library only exposes the
+  browser profile and proxy primitives needed to implement that policy.
 - Parsing is defensive and tolerates partial metadata, but Google can change its runtime
   schema at any time.
 - The parser prefers the explicit placelist ID from the resolved URL when available.
