@@ -5,6 +5,8 @@ import unittest
 
 from gmaps_scraper.place_scraper import (
     _build_place_details,
+    _extract_address_from_lines,
+    _extract_preview_coordinates,
     _extract_preview_place_enrichment,
     _merge_place_sources,
     _parse_review_count,
@@ -16,6 +18,7 @@ class PlaceScraperTests(unittest.TestCase):
     def test_parse_review_count_handles_suffixes(self) -> None:
         self.assertEqual(_parse_review_count("324"), 324)
         self.assertEqual(_parse_review_count("1,296"), 1296)
+        self.assertEqual(_parse_review_count("1.296"), 1296)
         self.assertEqual(_parse_review_count("3.6K"), 3600)
         self.assertEqual(_parse_review_count("9.4万"), 94000)
 
@@ -85,6 +88,18 @@ class PlaceScraperTests(unittest.TestCase):
 
         self.assertEqual(details.lat, 0.0)
         self.assertEqual(details.lng, 0.0)
+
+    def test_extract_address_from_lines_supports_non_japanese_addresses(self) -> None:
+        self.assertEqual(
+            _extract_address_from_lines(
+                [
+                    "Coffee shop",
+                    "Open ⋅ Closes 8 PM",
+                    "1600 Amphitheatre Parkway, Mountain View, CA 94043",
+                ]
+            ),
+            "1600 Amphitheatre Parkway, Mountain View, CA 94043",
+        )
 
     def test_extract_preview_place_enrichment_backfills_core_fields(self) -> None:
         payload_data = [
@@ -223,6 +238,17 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertEqual(enrichment["description"], "Modern setting for fine dining menus")
         self.assertEqual(enrichment["lat"], 35.6731762)
         self.assertEqual(enrichment["lng"], 139.7127216)
+
+    def test_extract_preview_coordinates_ignores_short_integer_pairs(self) -> None:
+        root = [
+            [1, 2],
+            ["noise", [None, None, 35.6731762, 139.7127216]],
+        ]
+
+        self.assertEqual(
+            _extract_preview_coordinates(root),
+            (35.6731762, 139.7127216),
+        )
 
     def test_merge_place_sources_only_backfills_missing_fields(self) -> None:
         merged = _merge_place_sources(

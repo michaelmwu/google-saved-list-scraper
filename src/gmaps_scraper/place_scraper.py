@@ -51,6 +51,15 @@ _PLUS_CODE_PATTERN = re.compile(
     r"(?:\s+[^\n]+)?\b"
 )
 _PHONE_PATTERN = re.compile(r"^\+?[0-9][0-9()\-\s]{7,}$")
+_POSTAL_CODE_PATTERN = re.compile(
+    r"\b(?:\d{5}(?:-\d{4})?|[A-Z]\d[A-Z]\s?\d[A-Z]\d|[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})\b",
+    re.IGNORECASE,
+)
+_ADDRESS_KEYWORD_PATTERN = re.compile(
+    r"\b(?:street|st|avenue|ave|road|rd|boulevard|blvd|lane|ln|drive|dr|way|place|pl|"
+    r"court|ct|square|sq|suite|ste|unit|floor|fl|plaza|parkway|pkwy|highway|hwy)\b",
+    re.IGNORECASE,
+)
 _PLACE_JS_EXTRACTOR = r"""
 () => {
   const titleSelectors = ["h1.DUwDvf", "h1.lfPIob", "div[role='main'] h1"];
@@ -620,9 +629,33 @@ def _extract_category_from_lines(lines: list[str]) -> str | None:
 
 def _extract_address_from_lines(lines: list[str]) -> str | None:
     for line in lines:
-        if "〒" in line or line.startswith("Japan, ") or ", Tokyo" in line:
+        if _looks_like_address_line(line):
             return line
     return None
+
+
+def _looks_like_address_line(line: str) -> bool:
+    lowered = line.lower()
+    if lowered.startswith(("http://", "https://", "www.")):
+        return False
+    if lowered.startswith(("closed", "open")) or "opens " in lowered:
+        return False
+    if _PHONE_PATTERN.match(line):
+        return False
+    if _PLUS_CODE_PATTERN.search(line):
+        return False
+    if _parse_rating(line) is not None and "★" not in line and "star" not in lowered:
+        if re.fullmatch(r"[0-9]+(?:[.,][0-9]+)?", line.strip()):
+            return False
+    if "〒" in line or line.startswith("Japan, "):
+        return True
+    if _POSTAL_CODE_PATTERN.search(line) and any(character.isalpha() for character in line):
+        return True
+    if re.search(r"\d", line) is None:
+        return False
+    if "," in line and any(character.isalpha() for character in line):
+        return True
+    return _ADDRESS_KEYWORD_PATTERN.search(line) is not None
 
 
 def _extract_status_from_lines(lines: list[str]) -> str | None:
@@ -779,6 +812,7 @@ def _extract_preview_description(strings: list[str]) -> str | None:
 
 
 def _extract_preview_coordinates(root: list[object]) -> tuple[float, float] | None:
+    fallback_e7_pair: tuple[float, float] | None = None
     for node in _iter_lists(root):
         if len(node) == 4 and node[0] is None and node[1] is None:
             lat = _parse_float(node[2])
@@ -786,11 +820,21 @@ def _extract_preview_coordinates(root: list[object]) -> tuple[float, float] | No
             if _valid_coordinates(lat, lng):
                 return (cast(float, lat), cast(float, lng))
         if len(node) == 2 and all(isinstance(value, int) for value in node):
-            lat = cast(int, node[0]) / 10_000_000
-            lng = cast(int, node[1]) / 10_000_000
-            if _valid_coordinates(lat, lng):
-                return (lat, lng)
-    return None
+            lat_e7 = cast(int, node[0])
+            lng_e7 = cast(int, node[1])
+            if not _looks_like_e7_coordinate_pair(lat_e7, lng_e7):
+                continue
+            lat = lat_e7 / 10_000_000
+            lng = lng_e7 / 10_000_000
+            if _valid_coordinates(lat, lng) and fallback_e7_pair is None:
+                fallback_e7_pair = (lat, lng)
+    return fallback_e7_pair
+
+
+def _looks_like_e7_coordinate_pair(lat_e7: int, lng_e7: int) -> bool:
+    if lat_e7 == 0 and lng_e7 == 0:
+        return True
+    return max(abs(lat_e7), abs(lng_e7)) >= 10_000
 
 
 def _iter_strings(node: object) -> Iterable[str]:
@@ -854,11 +898,14 @@ def _parse_review_count(value: object) -> int | None:
     match = re.search(r"([0-9][0-9,.\s]*)([KM萬万]?)", value.strip(), re.IGNORECASE)
     if match is None:
         return None
+    number_text = match.group(1).strip()
+    suffix = match.group(2).upper()
+    if not suffix and re.fullmatch(r"\d{1,3}(?:[.,\s]\d{3})+", number_text):
+        return int(re.sub(r"[.,\s]", "", number_text))
     try:
-        number = float(match.group(1).replace(",", "").replace(" ", ""))
+        number = float(number_text.replace(",", "").replace(" ", ""))
     except ValueError:
         return None
-    suffix = match.group(2).upper()
     multiplier = 1
     if suffix == "K":
         multiplier = 1_000
