@@ -60,6 +60,15 @@ _PLUS_CODE_PATTERN = re.compile(
     r"(?:\s+[^\n]+)?\b"
 )
 _PHONE_PATTERN = re.compile(r"^\+?[0-9][0-9()\-\s]{7,}$")
+_STATUS_LINE_PATTERN = re.compile(
+    r"^(?:"
+    r"(?:temporarily|permanently)\s+closed\b"
+    r"|(?:opens|closes)\b"
+    r"|(?:open|closed)\s+(?:now\b|24\s*hours\b)"
+    r"|(?:open|closed)\s*(?:[·⋅]|[-–—])\s*(?:opens?|closes?)\b"
+    r")",
+    re.IGNORECASE,
+)
 _POSTAL_CODE_PATTERN = re.compile(
     r"\b(?:\d{5}(?:-\d{4})?|[A-Z]\d[A-Z]\s?\d[A-Z]\d|[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})\b",
     re.IGNORECASE,
@@ -110,6 +119,34 @@ _PLACE_JS_EXTRACTOR = r"""
       const value = element?.getAttribute(attr)?.trim();
       if (value) {
         return value;
+      }
+    }
+    return null;
+  };
+
+  const firstImageUrl = (selectors, root = panel) => {
+    for (const selector of selectors) {
+      const element = root.querySelector(selector);
+      const value = element?.currentSrc
+        || element?.getAttribute("src")?.trim()
+        || element?.getAttribute("data-src")?.trim();
+      if (value) {
+        return value;
+      }
+    }
+    return null;
+  };
+
+  const firstBackgroundImageUrl = (selectors, root = panel) => {
+    for (const selector of selectors) {
+      const element = root.querySelector(selector);
+      if (!element) {
+        continue;
+      }
+      const style = getComputedStyle(element).backgroundImage || "";
+      const match = style.match(/url\((['"]?)(.*?)\1\)/);
+      if (match?.[2]) {
+        return match[2].trim();
       }
     }
     return null;
@@ -203,6 +240,27 @@ _PLACE_JS_EXTRACTOR = r"""
     }
   }
 
+  const mainPhotoUrl = firstImageUrl([
+    "button[jsaction*='image'] img",
+    "button[jsaction*='photo'] img",
+    "[data-photo-index] img",
+    "img[src*='googleusercontent.com']",
+    "img[src*='ggpht.com']",
+    "img[data-src*='googleusercontent.com']",
+    "img[data-src*='ggpht.com']",
+  ], document)
+    || firstBackgroundImageUrl([
+      "button[jsaction*='image']",
+      "button[jsaction*='photo']",
+      "[data-photo-index]",
+      "[aria-label*='Photo']",
+      "[aria-label*='photo']",
+      "[aria-label*='写真']",
+      "[aria-label*='画像']",
+    ], document);
+  const photoUrl = mainPhotoUrl
+    || firstAttr(["meta[property='og:image']", "meta[itemprop='image']"], "content", document);
+
   return {
     name: firstText(titleSelectors),
     secondary_name: firstText(["h2.bwoZTb span", "h2.bwoZTb"]),
@@ -227,6 +285,8 @@ _PLACE_JS_EXTRACTOR = r"""
       "button[data-item-id^='phone:']",
     ]),
     plus_code: itemValue("oloc"),
+    main_photo_url: mainPhotoUrl,
+    photo_url: photoUrl,
     panel_text: panel?.innerText || "",
     body_text: document.body?.innerText || "",
     limited_view: (document.body?.innerText || "")
@@ -433,6 +493,8 @@ def _build_place_details(
         plus_code=_clean_text(snapshot.get("plus_code"))
         or _extract_plus_code_from_lines(combined_lines),
         description=_extract_description(snapshot, combined_lines),
+        main_photo_url=_normalize_photo_url(snapshot.get("main_photo_url")),
+        photo_url=_normalize_photo_url(snapshot.get("photo_url")),
         lat=lat,
         lng=lng,
         limited_view=_to_bool(snapshot.get("limited_view"))
@@ -615,6 +677,8 @@ def _clean_category_text(value: object) -> str | None:
         return None
     if _looks_like_status_text(normalized):
         return None
+    if _looks_like_search_results_label(normalized):
+        return None
     if not any(character.isalpha() for character in normalized):
         return None
     return normalized
@@ -653,11 +717,11 @@ def _extract_secondary_name(lines: list[str], *, name: str | None) -> str | None
     except ValueError:
         return None
     for line in lines[start + 1 : start + 4]:
+        if _parse_rating(line) is not None:
+            return None
         normalized = _clean_name_text(line)
         if normalized is None or normalized == name:
             continue
-        if _parse_rating(normalized) is not None:
-            return None
         if _extract_category_from_lines([normalized]) is not None:
             return None
         return normalized
@@ -685,7 +749,7 @@ def _looks_like_address_line(line: str) -> bool:
     lowered = line.lower()
     if lowered.startswith(("http://", "https://", "www.")):
         return False
-    if lowered.startswith(("closed", "open")) or "opens " in lowered:
+    if _looks_like_status_text(line):
         return False
     if _PHONE_PATTERN.match(line):
         return False
@@ -707,8 +771,7 @@ def _looks_like_address_line(line: str) -> bool:
 
 def _extract_status_from_lines(lines: list[str]) -> str | None:
     for line in lines:
-        lowered = line.lower()
-        if lowered.startswith("closed") or lowered.startswith("open") or "opens " in lowered:
+        if _looks_like_status_text(line):
             return line
     return None
 
@@ -772,6 +835,24 @@ def _normalize_preview_website(value: str) -> str | None:
     if parsed.netloc.endswith("inline.app"):
         return None
     return value
+
+
+def _normalize_photo_url(value: object) -> str | None:
+    normalized = _clean_text(value)
+    if normalized is None:
+        return None
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    host = parsed.netloc.lower()
+    path = parsed.path.lower()
+    if host.endswith("gstatic.com") and (
+        "result-no-thumbnail" in path
+        or "default_geocode" in path
+        or "mapslogo" in path
+    ):
+        return None
+    return normalized
 
 
 def _extract_preview_phone(strings: list[str]) -> str | None:
@@ -882,8 +963,7 @@ def _looks_like_status_text(value: str) -> bool:
     normalized = _clean_text(value)
     if normalized is None:
         return False
-    lowered = normalized.lower()
-    if lowered.startswith(("open", "closed")) or "opens " in lowered or "closes " in lowered:
+    if _STATUS_LINE_PATTERN.match(normalized):
         return True
     return any(marker in normalized for marker in ("営業時間", "営業開始", "営業終了"))
 

@@ -79,6 +79,8 @@ class PlaceDetails:
     phone: str | None = None
     plus_code: str | None = None
     description: str | None = None
+    main_photo_url: str | None = None
+    photo_url: str | None = None
     secondary_name: str | None = None
     lat: float | None = None
     lng: float | None = None
@@ -100,6 +102,8 @@ class PlaceDetails:
             "phone": self.phone,
             "plus_code": self.plus_code,
             "description": self.description,
+            "main_photo_url": self.main_photo_url,
+            "photo_url": self.photo_url,
             "secondary_name": self.secondary_name,
             "lat": self.lat,
             "lng": self.lng,

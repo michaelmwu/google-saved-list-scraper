@@ -5,10 +5,14 @@ import unittest
 
 from gmaps_scraper.place_scraper import (
     _build_place_details,
+    _clean_category_text,
+    _clean_name_text,
     _extract_address_from_lines,
     _extract_preview_coordinates,
+    _extract_preview_description,
     _extract_preview_phone,
     _extract_preview_place_enrichment,
+    _extract_secondary_name,
     _merge_place_sources,
     _normalize_preview_website,
     _parse_review_count,
@@ -102,6 +106,16 @@ class PlaceScraperTests(unittest.TestCase):
             ),
             "1600 Amphitheatre Parkway, Mountain View, CA 94043",
         )
+
+    def test_clean_name_text_preserves_names_that_start_with_open_or_closed(self) -> None:
+        self.assertEqual(_clean_name_text("Open Kitchen"), "Open Kitchen")
+        self.assertEqual(_clean_name_text("Closed Loop Coffee"), "Closed Loop Coffee")
+        self.assertIsNone(_clean_name_text("Open ⋅ Closes 8 PM"))
+
+    def test_clean_category_text_rejects_search_result_labels(self) -> None:
+        self.assertIsNone(_clean_category_text("share"))
+        self.assertIsNone(_clean_category_text("結果"))
+        self.assertEqual(_clean_category_text("Japanese restaurant"), "Japanese restaurant")
 
     def test_extract_preview_place_enrichment_backfills_core_fields(self) -> None:
         payload_data = [
@@ -241,6 +255,20 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertEqual(enrichment["lat"], 35.6731762)
         self.assertEqual(enrichment["lng"], 139.7127216)
 
+    def test_extract_preview_description_preserves_text_starting_with_open(self) -> None:
+        description = _extract_preview_description(
+            [
+                "Open fire cooking over binchotan.",
+                "Open ⋅ Closes 10 PM",
+                "SearchResult.TYPE_RESTAURANT",
+            ]
+        )
+
+        self.assertEqual(
+            description,
+            "Open fire cooking over binchotan.",
+        )
+
     def test_extract_preview_coordinates_ignores_short_integer_pairs(self) -> None:
         root = [
             [1, 2],
@@ -294,6 +322,56 @@ class PlaceScraperTests(unittest.TestCase):
         )
 
         self.assertIsNone(details.name)
+
+    def test_build_place_details_preserves_open_prefixed_name_and_description(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Open+Kitchen",
+            resolved_url="https://www.google.com/maps/place/Open+Kitchen",
+            snapshot={
+                "name": "Open Kitchen",
+                "description": "Open fire cooking in a bright room.",
+                "body_text": "\n".join(
+                    [
+                        "Open Kitchen",
+                        "Restaurant",
+                        "Open fire cooking in a bright room.",
+                    ]
+                ),
+            },
+        )
+
+        self.assertEqual(details.name, "Open Kitchen")
+        self.assertEqual(details.description, "Open fire cooking in a bright room.")
+        self.assertIsNone(details.status)
+
+    def test_build_place_details_preserves_photo_url(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Open+Kitchen",
+            resolved_url="https://www.google.com/maps/place/Open+Kitchen",
+            snapshot={
+                "name": "Open Kitchen",
+                "main_photo_url": "https://lh3.googleusercontent.com/p/main-example=s680-w680-h510",
+                "photo_url": "https://lh3.googleusercontent.com/p/example=s680-w680-h510",
+                "body_text": "Open Kitchen",
+            },
+        )
+
+        self.assertEqual(
+            details.main_photo_url,
+            "https://lh3.googleusercontent.com/p/main-example=s680-w680-h510",
+        )
+        self.assertEqual(
+            details.photo_url,
+            "https://lh3.googleusercontent.com/p/example=s680-w680-h510",
+        )
+
+    def test_extract_secondary_name_aborts_when_rating_line_follows_name(self) -> None:
+        self.assertIsNone(
+            _extract_secondary_name(
+                ["Den", "4.4", "傳"],
+                name="Den",
+            )
+        )
 
     def test_normalize_preview_website_rejects_streetview_thumbnail_urls(self) -> None:
         self.assertIsNone(
