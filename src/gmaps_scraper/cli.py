@@ -254,27 +254,31 @@ def _download_place_image(
 ) -> None:
     if photo_url is None:
         raise RuntimeError(missing_message)
+    try:
+        curl_requests = _import_curl_requests()
+        session_kwargs: dict[str, object] = {
+            "impersonate": _HTTP_IMPERSONATE,
+            "allow_redirects": True,
+            "default_headers": True,
+            "timeout": 30,
+        }
+        if http_session is not None and http_session.proxy is not None:
+            session_kwargs["proxy"] = http_session.proxy
 
-    curl_requests = _import_curl_requests()
-    session_kwargs: dict[str, object] = {
-        "impersonate": _HTTP_IMPERSONATE,
-        "allow_redirects": True,
-        "default_headers": True,
-        "timeout": 30,
-    }
-    if http_session is not None and http_session.proxy is not None:
-        session_kwargs["proxy"] = http_session.proxy
+        with curl_requests.Session(**session_kwargs) as session:
+            response = session.get(
+                photo_url,
+                referer=referer,
+            )
+            _raise_for_status(response)
+            content = response.content
 
-    with curl_requests.Session(**session_kwargs) as session:
-        response = session.get(
-            photo_url,
-            referer=referer,
-        )
-        _raise_for_status(response)
-        content = response.content
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(content)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(content)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Failed to download place photo: {exc}") from exc
 
 
 def _resolve_debug_output_dir(

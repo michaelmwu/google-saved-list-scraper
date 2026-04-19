@@ -795,20 +795,37 @@ def _extract_plus_code_from_lines(lines: list[str]) -> str | None:
 
 
 def _extract_description(snapshot: Mapping[str, object], lines: list[str]) -> str | None:
-    direct = _clean_text(snapshot.get("description"))
-    if direct is not None and not _looks_like_status_text(direct):
+    direct = _clean_description_text(snapshot.get("description"))
+    if direct is not None:
         return direct
     for index, line in enumerate(lines):
         if line.startswith("Seasonal ") or line.startswith("Modern setting "):
             return line
         if line == "Share" and index + 1 < len(lines):
-            candidate = lines[index + 1]
-            if (
-                candidate.lower() not in _DESCRIPTION_STOP_MARKERS
-                and not _looks_like_status_text(candidate)
-            ):
+            candidate = _clean_description_text(lines[index + 1])
+            if candidate is not None and candidate.lower() not in _DESCRIPTION_STOP_MARKERS:
                 return candidate
     return None
+
+
+def _clean_description_text(value: object) -> str | None:
+    normalized = _clean_text(value)
+    if normalized is None:
+        return None
+    if normalized.lower() in _DESCRIPTION_STOP_MARKERS:
+        return None
+    if _looks_like_status_text(normalized):
+        return None
+    if _looks_like_search_results_label(normalized) or normalized.casefold() == "share":
+        return None
+    if _normalize_phone_candidate(normalized) is not None:
+        return None
+    if (
+        _parse_rating(normalized) is not None
+        and not any(character.isalpha() for character in normalized)
+    ):
+        return None
+    return normalized
 
 
 def _extract_preview_website(strings: list[str]) -> str | None:

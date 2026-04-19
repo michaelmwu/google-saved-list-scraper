@@ -79,12 +79,12 @@ class PlaceDetails:
     phone: str | None = None
     plus_code: str | None = None
     description: str | None = None
-    main_photo_url: str | None = None
-    photo_url: str | None = None
     secondary_name: str | None = None
     lat: float | None = None
     lng: float | None = None
     limited_view: bool = False
+    main_photo_url: str | None = None
+    photo_url: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Convert place details into a JSON-serializable dictionary."""

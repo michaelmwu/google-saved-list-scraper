@@ -303,17 +303,30 @@ class PlaceScraperTests(unittest.TestCase):
                 "name": "",
                 "secondary_name": "",
                 "phone": "5180951040094558101",
-                "status": "営業時間外 · 営業開始: 18:00（火）",
-                "description": "営業時間外 · 営業開始: 18:00（火）",
+                "status": "営業時間外 · 営業開始: 18:00\uFF08火\uFF09",
+                "description": "営業時間外 · 営業開始: 18:00\uFF08火\uFF09",
                 "lat": 48.8814703,
                 "lng": 2.340862,
-                "body_text": "\n".join(["", "", "営業時間外 · 営業開始: 18:00（火）"]),
+                "body_text": "\n".join(["", "", "営業時間外 · 営業開始: 18:00\uFF08火\uFF09"]),
             },
         )
 
         self.assertIsNone(details.name)
         self.assertIsNone(details.secondary_name)
         self.assertIsNone(details.phone)
+        self.assertIsNone(details.description)
+
+    def test_build_place_details_rejects_placeholder_description_direct_value(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Bianchetto",
+            resolved_url="https://www.google.com/maps/place/Bianchetto",
+            snapshot={
+                "name": "Bianchetto",
+                "description": "Share",
+                "body_text": "Bianchetto\nRestaurant",
+            },
+        )
+
         self.assertIsNone(details.description)
 
     def test_build_place_details_rejects_search_results_labels_and_rating_categories(self) -> None:

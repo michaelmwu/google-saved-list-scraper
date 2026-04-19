@@ -226,7 +226,7 @@ class CliTests(unittest.TestCase):
             category="Japanese restaurant",
             rating=4.4,
             review_count=324,
-            address="Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome−3−18",
+            address="Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome\u22123\u221218",
             main_photo_url="https://lh3.googleusercontent.com/p/main-example=s680-w680-h510",
             photo_url="https://lh3.googleusercontent.com/p/example=s680-w680-h510",
         )
@@ -267,7 +267,7 @@ class CliTests(unittest.TestCase):
             category="Japanese restaurant",
             rating=4.4,
             review_count=324,
-            address="Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome−3−18",
+            address="Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome\u22123\u221218",
             main_photo_url="https://lh3.googleusercontent.com/p/main-example=s680-w680-h510",
             photo_url="https://lh3.googleusercontent.com/p/example=s680-w680-h510",
         )
@@ -339,7 +339,7 @@ class CliTests(unittest.TestCase):
             category="Japanese restaurant",
             rating=4.4,
             review_count=324,
-            address="Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome−3−18",
+            address="Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome\u22123\u221218",
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -368,7 +368,7 @@ class CliTests(unittest.TestCase):
             category="Japanese restaurant",
             rating=4.4,
             review_count=324,
-            address="Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome−3−18",
+            address="Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome\u22123\u221218",
             photo_url="https://lh3.googleusercontent.com/p/example=s680-w680-h510",
         )
 
@@ -436,7 +436,7 @@ class CliTests(unittest.TestCase):
             category="Japanese restaurant",
             rating=4.4,
             review_count=324,
-            address="Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome−3−18",
+            address="Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome\u22123\u221218",
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -478,7 +478,7 @@ class CliTests(unittest.TestCase):
             category="Japanese restaurant",
             rating=4.4,
             review_count=324,
-            address="Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome−3−18",
+            address="Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome\u22123\u221218",
             main_photo_url="https://lh3.googleusercontent.com/p/main-example=s680-w680-h510",
             photo_url="https://lh3.googleusercontent.com/p/example=s680-w680-h510",
         )
@@ -521,6 +521,32 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(output_path.read_bytes(), b"photo-bytes")
             raise_for_status.assert_called_once()
+
+    def test_download_place_photo_wraps_network_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_path = Path(tmp_dir) / "photo.jpg"
+            with self.assertRaisesRegex(RuntimeError, "Failed to download place photo: boom"):
+                with patch(
+                    "gmaps_scraper.cli._import_curl_requests",
+                    side_effect=Exception("boom"),
+                ):
+                    _download_place_photo(
+                        PlaceDetails(
+                            source_url="https://www.google.com/maps/place/Den",
+                            resolved_url="https://www.google.com/maps/place/Den/@35.6731762,139.7127216,17z",
+                            name="Den",
+                            category="Japanese restaurant",
+                            rating=4.4,
+                            review_count=324,
+                            address=(
+                                "Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, "
+                                "2 Chome\u22123\u221218"
+                            ),
+                            photo_url="https://lh3.googleusercontent.com/p/example=s680-w680-h510",
+                        ),
+                        output_path=output_path,
+                        http_session=None,
+                    )
 
     def test_debug_output_dir_writes_dump_and_stdout_payload(self) -> None:
         artifacts = _artifacts()
