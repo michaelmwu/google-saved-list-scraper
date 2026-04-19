@@ -42,7 +42,6 @@ _SEARCH_RESULTS_LABELS = {
     "results",
     "search result",
     "search results",
-    "share",
     "共有",
     "結果",
 }
@@ -241,6 +240,9 @@ _PLACE_JS_EXTRACTOR = r"""
   }
 
   const mainPhotoUrl = firstImageUrl([
+    "button[jsaction*='heroHeaderImage'] img",
+    "button[aria-label^='Photo of'] img",
+    "button[aria-label^='写真'] img",
     "button[jsaction*='image'] img",
     "button[jsaction*='photo'] img",
     "[data-photo-index] img",
@@ -677,7 +679,7 @@ def _clean_category_text(value: object) -> str | None:
         return None
     if _looks_like_status_text(normalized):
         return None
-    if _looks_like_search_results_label(normalized):
+    if _looks_like_search_results_label(normalized) or normalized.casefold() == "share":
         return None
     if not any(character.isalpha() for character in normalized):
         return None
@@ -852,6 +854,8 @@ def _normalize_photo_url(value: object) -> str | None:
         or "mapslogo" in path
     ):
         return None
+    if "streetviewpixels-pa.googleapis.com" in host:
+        return None
     return normalized
 
 
@@ -953,8 +957,6 @@ def _normalize_phone_candidate(value: object) -> str | None:
         return None
     digit_count = sum(character.isdigit() for character in normalized)
     if digit_count < 8 or digit_count > 15:
-        return None
-    if normalized.isdigit() and digit_count > 11:
         return None
     return normalized
 

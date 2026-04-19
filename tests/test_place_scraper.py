@@ -14,6 +14,7 @@ from gmaps_scraper.place_scraper import (
     _extract_preview_place_enrichment,
     _extract_secondary_name,
     _merge_place_sources,
+    _normalize_phone_candidate,
     _normalize_preview_website,
     _parse_review_count,
     _seed_google_consent_cookies,
@@ -116,6 +117,9 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIsNone(_clean_category_text("share"))
         self.assertIsNone(_clean_category_text("結果"))
         self.assertEqual(_clean_category_text("Japanese restaurant"), "Japanese restaurant")
+
+    def test_clean_name_text_preserves_exact_share_name(self) -> None:
+        self.assertEqual(_clean_name_text("Share"), "Share")
 
     def test_extract_preview_place_enrichment_backfills_core_fields(self) -> None:
         payload_data = [
@@ -286,6 +290,9 @@ class PlaceScraperTests(unittest.TestCase):
             "+33 1 42 00 00 00",
         )
 
+    def test_normalize_phone_candidate_accepts_long_unformatted_international_numbers(self) -> None:
+        self.assertEqual(_normalize_phone_candidate("442071838750"), "442071838750")
+
     def test_build_place_details_ignores_placeholder_name_invalid_phone_and_status_description(
         self,
     ) -> None:
@@ -364,6 +371,25 @@ class PlaceScraperTests(unittest.TestCase):
             details.photo_url,
             "https://lh3.googleusercontent.com/p/example=s680-w680-h510",
         )
+
+    def test_build_place_details_rejects_street_view_as_photo(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Open+Kitchen",
+            resolved_url="https://www.google.com/maps/place/Open+Kitchen",
+            snapshot={
+                "name": "Open Kitchen",
+                "main_photo_url": (
+                    "https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=abc"
+                ),
+                "photo_url": (
+                    "https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=abc"
+                ),
+                "body_text": "Open Kitchen",
+            },
+        )
+
+        self.assertIsNone(details.main_photo_url)
+        self.assertIsNone(details.photo_url)
 
     def test_extract_secondary_name_aborts_when_rating_line_follows_name(self) -> None:
         self.assertIsNone(
