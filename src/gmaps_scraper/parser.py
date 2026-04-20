@@ -808,7 +808,7 @@ def _owners_refer_to_same_person(left: ListOwner, right: ListOwner) -> bool:
 
     if left.photo_url is not None and right.photo_url is not None:
         return left.photo_url == right.photo_url
-    return True
+    return False
 
 
 def _normalize_owner_name(value: str) -> str:

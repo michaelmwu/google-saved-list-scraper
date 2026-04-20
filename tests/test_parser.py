@@ -736,6 +736,35 @@ class ParserTests(unittest.TestCase):
             ],
         )
 
+    def test_keeps_same_name_collaborator_when_owner_lacks_second_identifier(self) -> None:
+        runtime_state = copy.deepcopy(["noise", _LIST_NODE])
+        runtime_state[1][3] = ["Shared Name"]
+        second_place = runtime_state[1][8][1]
+        assert isinstance(second_place, list)
+        second_place[12] = [
+            "Shared Name",
+            None,
+            "205678901234567890123",
+        ]
+
+        parsed = parse_saved_list_artifacts(_LIST_URL, runtime_state=runtime_state)
+
+        self.assertEqual(
+            parsed.owner.to_dict() if parsed.owner else None,
+            {"name": "Shared Name"},
+        )
+        self.assertEqual(
+            [owner.to_dict() for owner in parsed.collaborators],
+            [
+                {
+                    "name": "Fixture Owner",
+                    "photo_url": "https://lh3.googleusercontent.com/a-/fixture-owner",
+                    "profile_id": "104356373423434804635",
+                },
+                {"name": "Shared Name", "profile_id": "205678901234567890123"},
+            ],
+        )
+
     def test_raises_when_no_place_records_are_found(self) -> None:
         runtime_state = copy.deepcopy(["noise", _LIST_NODE])
         runtime_state[1][8] = []
