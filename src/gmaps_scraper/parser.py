@@ -297,11 +297,7 @@ def _extract_metadata(
         collaborators = [
             collaborator
             for collaborator in collaborators
-            if (
-                collaborator.name,
-                collaborator.photo_url,
-                collaborator.profile_id,
-            ) != (owner.name, owner.photo_url, owner.profile_id)
+            if not _owners_refer_to_same_person(collaborator, owner)
         ]
     return title, description, owner, collaborators
 
@@ -772,7 +768,7 @@ def _is_note_candidate(
 ) -> bool:
     if value is None:
         return False
-    if not _is_plain_text(value):
+    if not _is_note_text(value):
         return False
     if name is not None and value == name:
         return False
@@ -791,6 +787,32 @@ def _is_plain_text(value: str) -> bool:
     if value.startswith(_XSSI_PREFIX):
         return False
     return True
+
+
+def _is_note_text(value: str) -> bool:
+    if value.startswith(("http://", "https://", "/g/")):
+        return False
+    if value.startswith(_XSSI_PREFIX):
+        return False
+    return True
+
+
+def _owners_refer_to_same_person(left: ListOwner, right: ListOwner) -> bool:
+    if left.profile_id is not None and right.profile_id is not None:
+        return left.profile_id == right.profile_id
+
+    left_name = _normalize_owner_name(left.name)
+    right_name = _normalize_owner_name(right.name)
+    if left_name != right_name:
+        return False
+
+    if left.photo_url is not None and right.photo_url is not None:
+        return left.photo_url == right.photo_url
+    return False
+
+
+def _normalize_owner_name(value: str) -> str:
+    return " ".join(value.split()).casefold()
 
 
 def _looks_like_cid_candidate(value: str) -> bool:
