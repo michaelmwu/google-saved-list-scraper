@@ -457,6 +457,17 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(parsed.places[0].note, "Loved it ❤️")
         self.assertFalse(parsed.places[0].is_favorite)
 
+    def test_preserves_note_with_inline_url(self) -> None:
+        runtime_state = copy.deepcopy(["noise", _LIST_NODE])
+        first_place = runtime_state[1][8][0]
+        assert isinstance(first_place, list)
+
+        first_place[3] = "Try this menu: https://example.com/menu"
+
+        parsed = parse_saved_list_artifacts(_LIST_URL, runtime_state=runtime_state)
+
+        self.assertEqual(parsed.places[0].note, "Try this menu: https://example.com/menu")
+
     def test_prefers_enclosing_place_name_over_metadata_string(self) -> None:
         runtime_state = [
             "noise",
@@ -700,6 +711,29 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(
             parsed.places[1].added_by.to_dict() if parsed.places[1].added_by else None,
             {"name": "Name Only Collaborator"},
+        )
+
+    def test_filters_sparse_owner_from_collaborators(self) -> None:
+        runtime_state = copy.deepcopy(["noise", _LIST_NODE])
+        first_place = runtime_state[1][8][0]
+        assert isinstance(first_place, list)
+        first_place[12] = [
+            "Fixture Owner",
+            None,
+            "104356373423434804635",
+        ]
+
+        parsed = parse_saved_list_artifacts(_LIST_URL, runtime_state=runtime_state)
+
+        self.assertEqual(
+            [owner.to_dict() for owner in parsed.collaborators],
+            [
+                {
+                    "name": "Fixture Collaborator",
+                    "photo_url": "https://lh3.googleusercontent.com/a-/fixture-collaborator",
+                    "profile_id": "205678901234567890123",
+                }
+            ],
         )
 
     def test_raises_when_no_place_records_are_found(self) -> None:
