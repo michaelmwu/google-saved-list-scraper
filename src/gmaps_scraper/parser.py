@@ -343,7 +343,11 @@ def _extract_places(node: JSONValue) -> list[Place]:
             google_id=google_id,
             is_favorite=is_favorite,
         )
-        dedupe_key = cid or google_id or f"{place.name}:{lat:.6f}:{lng:.6f}"
+        dedupe_key = (
+            google_id
+            or (f"{cid}:{lat:.6f}:{lng:.6f}" if cid is not None else None)
+            or f"{place.name}:{lat:.6f}:{lng:.6f}"
+        )
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
@@ -535,19 +539,19 @@ def _find_cid_in_value(value: JSONValue | None) -> str | None:
     if not isinstance(value, list):
         return None
 
-    numeric_candidates = [
-        candidate
-        for candidate in (
-            _normalize_cid_token(item)
-            for item in value
-        )
-        if candidate is not None
+    numeric_texts = [
+        text
+        for text in (_clean_text(item) for item in value)
+        if text is not None and _LONG_INTEGER_PATTERN.fullmatch(text) is not None
     ]
-    if not numeric_candidates:
+    if not numeric_texts:
         return None
-    if len(numeric_candidates) >= 2:
-        return numeric_candidates[1]
-    return numeric_candidates[0]
+    for text in numeric_texts:
+        if not text.startswith("-"):
+            return _normalize_cid_token(text)
+    if len(numeric_texts) >= 2:
+        return _normalize_cid_token(numeric_texts[1])
+    return _normalize_cid_token(numeric_texts[0])
 
 
 def _normalize_cid_token(value: JSONValue | None) -> str | None:
@@ -684,3 +688,8 @@ def _is_plain_text(value: str) -> bool:
     if value.startswith(_XSSI_PREFIX):
         return False
     return True
+
+
+def _looks_like_cid_candidate(value: str) -> bool:
+    normalized = value.removeprefix("-")
+    return normalized.isdigit() and len(normalized) >= 10
