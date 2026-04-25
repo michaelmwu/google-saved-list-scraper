@@ -262,6 +262,19 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertEqual(enrichment["phone"], "+81 3-6455-5433")
         self.assertEqual(enrichment["plus_code"], "MPF7+73 Shibuya, Tokyo, Japan")
         self.assertEqual(
+            enrichment["address_parts"],
+            [
+                "2 Chome Jingumae",
+                "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                "Shibuya",
+                "150-0001",
+                "Tokyo",
+                "JP",
+                ["Floor 1"],
+            ],
+        )
+        self.assertEqual(
             enrichment["address"],
             "Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome−3−18 Den, 建築家会館ＪＩＡ館",
         )
@@ -438,11 +451,34 @@ class PlaceScraperTests(unittest.TestCase):
             snapshot={
                 "name": "Den",
                 "google_place_id": "ChIJ8T36HxCLGGARvpARPDyaKLA",
+                "address_parts": [
+                    "2 Chome Jingumae",
+                    "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                    "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                    "Shibuya",
+                    "150-0001",
+                    "Tokyo",
+                    "JP",
+                    ["Floor 1"],
+                ],
                 "body_text": "Den\nJapanese restaurant",
             },
         )
 
         self.assertEqual(details.google_place_id, "ChIJ8T36HxCLGGARvpARPDyaKLA")
+        self.assertEqual(
+            details.address_parts,
+            [
+                "2 Chome Jingumae",
+                "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                "Shibuya",
+                "150-0001",
+                "Tokyo",
+                "JP",
+                ["Floor 1"],
+            ],
+        )
 
     def test_build_place_details_rejects_street_view_as_photo(self) -> None:
         details = _build_place_details(

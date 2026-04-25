@@ -496,6 +496,7 @@ def _build_place_details(
         or _extract_phone_from_lines(combined_lines),
         plus_code=_clean_text(snapshot.get("plus_code"))
         or _extract_plus_code_from_lines(combined_lines),
+        address_parts=_extract_address_parts(snapshot.get("address_parts")),
         description=_extract_description(snapshot, combined_lines),
         main_photo_url=_normalize_photo_url(snapshot.get("main_photo_url")),
         photo_url=_normalize_photo_url(snapshot.get("photo_url")),
@@ -617,6 +618,10 @@ def _extract_preview_place_enrichment(payload_text: str) -> dict[str, object]:
     plus_code = _extract_preview_plus_code(strings)
     if plus_code is not None:
         enrichment["plus_code"] = plus_code
+
+    address_parts = _extract_preview_address_parts(root)
+    if address_parts is not None:
+        enrichment["address_parts"] = address_parts
 
     address = _extract_preview_address(strings)
     if address is not None:
@@ -928,6 +933,12 @@ def _iter_preview_lists(value: object) -> Iterable[list[object]]:
             yield from _iter_preview_lists(item)
 
 
+def _extract_address_parts(value: object) -> list[object] | None:
+    if not isinstance(value, list):
+        return None
+    return value
+
+
 def _extract_preview_phone(strings: list[str]) -> str | None:
     best_local: str | None = None
     for value in strings:
@@ -952,6 +963,35 @@ def _extract_preview_plus_code(strings: list[str]) -> str | None:
             if compound_match is None:
                 compound_match = candidate
     return compound_match
+
+
+def _extract_preview_address_parts(root: list[object]) -> list[object] | None:
+    for node in _iter_preview_lists(root):
+        if len(node) < 2:
+            continue
+        raw_parts = node[0]
+        raw_plus_code = node[1]
+        if not isinstance(raw_parts, list) or not isinstance(raw_plus_code, list):
+            continue
+        if len(raw_parts) < 7:
+            continue
+        if not all(isinstance(value, str) for value in raw_parts[:7]):
+            continue
+        if len(raw_parts) > 8:
+            continue
+        if len(raw_parts) == 8 and not isinstance(raw_parts[7], list):
+            continue
+        if not any(
+            isinstance(value, list)
+            and any(
+                isinstance(item, str) and _PLUS_CODE_PATTERN.search(item) is not None
+                for item in value
+            )
+            for value in raw_plus_code
+        ):
+            continue
+        return list(raw_parts)
+    return None
 
 
 def _extract_preview_address(strings: list[str]) -> str | None:
