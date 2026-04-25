@@ -14,6 +14,7 @@ from gmaps_scraper.place_scraper import (
     _extract_preview_place_enrichment,
     _extract_secondary_name,
     _merge_place_sources,
+    _normalize_google_place_id,
     _normalize_phone_candidate,
     _normalize_preview_website,
     _parse_review_count,
@@ -158,6 +159,15 @@ class PlaceScraperTests(unittest.TestCase):
                 None,
                 None,
                 None,
+                [
+                    [
+                        "0x60188c981788132b:0x6ef132909b155a88",
+                        None,
+                        None,
+                        "/m/0131whcb",
+                        "ChIJ8T36HxCLGGARvpARPDyaKLA",
+                    ]
+                ],
                 None,
                 None,
                 None,
@@ -253,6 +263,19 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertEqual(enrichment["phone"], "+81 3-6455-5433")
         self.assertEqual(enrichment["plus_code"], "MPF7+73 Shibuya, Tokyo, Japan")
         self.assertEqual(
+            enrichment["address_parts"],
+            [
+                "2 Chome Jingumae",
+                "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                "Shibuya",
+                "150-0001",
+                "Tokyo",
+                "JP",
+                ["Floor 1"],
+            ],
+        )
+        self.assertEqual(
             enrichment["address"],
             "Japan, 〒150-0001 Tokyo, Shibuya, Jingumae, 2 Chome−3−18 Den, 建築家会館ＪＩＡ館",
         )
@@ -260,6 +283,7 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertEqual(enrichment["description"], "Modern setting for fine dining menus")
         self.assertEqual(enrichment["lat"], 35.6731762)
         self.assertEqual(enrichment["lng"], 139.7127216)
+        self.assertEqual(enrichment["google_place_id"], "ChIJ8T36HxCLGGARvpARPDyaKLA")
 
     def test_extract_preview_description_preserves_text_starting_with_open(self) -> None:
         description = _extract_preview_description(
@@ -284,6 +308,29 @@ class PlaceScraperTests(unittest.TestCase):
         )
 
         self.assertEqual(description, "Open now for lunch and dinner service.")
+
+    def test_extract_preview_place_enrichment_rejects_invalid_address_parts(self) -> None:
+        payload_data = [
+            [
+                [
+                    [
+                        "2 Chome Jingumae",
+                        "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                        "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                        "Shibuya",
+                        "150-0001",
+                        "Tokyo",
+                        "JP",
+                        ["Floor 1", 3],
+                    ],
+                    ["0ahUKE", "8Q7XMPF7+73", ["MPF7+73 Shibuya, Tokyo, Japan"], 3],
+                ]
+            ]
+        ]
+        payload = ")]}'\n" + json.dumps(payload_data, ensure_ascii=False)
+        enrichment = _extract_preview_place_enrichment(payload)
+
+        self.assertNotIn("address_parts", enrichment)
 
     def test_extract_preview_coordinates_ignores_short_integer_pairs(self) -> None:
         root = [
@@ -419,6 +466,70 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertEqual(
             details.photo_url,
             "https://lh3.googleusercontent.com/p/example=s680-w680-h510",
+        )
+
+    def test_build_place_details_preserves_google_place_id(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Den",
+            resolved_url="https://www.google.com/maps/place/Den/@35.6731762,139.7127216,17z",
+            snapshot={
+                "name": "Den",
+                "google_place_id": "ChIJ8T36HxCLGGARvpARPDyaKLA",
+                "address_parts": [
+                    "2 Chome Jingumae",
+                    "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                    "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                    "Shibuya",
+                    "150-0001",
+                    "Tokyo",
+                    "JP",
+                    ["Floor 1"],
+                ],
+                "body_text": "Den\nJapanese restaurant",
+            },
+        )
+
+        self.assertEqual(details.google_place_id, "ChIJ8T36HxCLGGARvpARPDyaKLA")
+        self.assertEqual(
+            details.address_parts,
+            [
+                "2 Chome Jingumae",
+                "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                "Shibuya",
+                "150-0001",
+                "Tokyo",
+                "JP",
+                ["Floor 1"],
+            ],
+        )
+
+    def test_build_place_details_rejects_invalid_address_parts(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Den",
+            resolved_url="https://www.google.com/maps/place/Den/@35.6731762,139.7127216,17z",
+            snapshot={
+                "name": "Den",
+                "address_parts": [
+                    "2 Chome Jingumae",
+                    "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                    "Jingumae, 2 Chome−3−18 建築家会館ＪＩＡ館",
+                    "Shibuya",
+                    "150-0001",
+                    "Tokyo",
+                    "JP",
+                    ["Floor 1", 3],
+                ],
+                "body_text": "Den\nJapanese restaurant",
+            },
+        )
+
+        self.assertIsNone(details.address_parts)
+
+    def test_normalize_google_place_id_accepts_trailing_hyphen(self) -> None:
+        self.assertEqual(
+            _normalize_google_place_id("ChIJabcdefghij-"),
+            "ChIJabcdefghij-",
         )
 
     def test_build_place_details_rejects_street_view_as_photo(self) -> None:
