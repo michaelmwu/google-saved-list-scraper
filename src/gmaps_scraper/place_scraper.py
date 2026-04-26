@@ -1076,8 +1076,9 @@ def _extract_preview_address(strings: list[str]) -> str | None:
             continue
         if "maps/preview/place" in normalized or normalized.startswith("/g/"):
             continue
-        if _clean_address_text(normalized) is not None:
-            candidates.append(normalized)
+        cleaned = _clean_address_text(normalized)
+        if cleaned is not None:
+            candidates.append(cleaned)
     if not candidates:
         return None
     return max(candidates, key=len)

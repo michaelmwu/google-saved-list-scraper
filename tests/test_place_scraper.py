@@ -368,6 +368,17 @@ class PlaceScraperTests(unittest.TestCase):
             "26-28 Cotham Rd, Kew VIC 3101, Australia",
         )
 
+    def test_extract_preview_address_uses_cleaned_segment_from_compound_value(self) -> None:
+        self.assertEqual(
+            _extract_preview_address(
+                [
+                    "Cafe · 1600 Amphitheatre Parkway, Mountain View, CA 94043",
+                    "Cafe",
+                ]
+            ),
+            "1600 Amphitheatre Parkway, Mountain View, CA 94043",
+        )
+
     def test_normalize_phone_candidate_accepts_long_unformatted_international_numbers(self) -> None:
         self.assertEqual(_normalize_phone_candidate("442071838750"), "442071838750")
 
@@ -567,7 +578,9 @@ class PlaceScraperTests(unittest.TestCase):
 
         self.assertEqual(details.address, "26-28 Cotham Rd, Kew VIC 3101, Australia")
 
-    def test_build_place_details_rejects_invalid_snapshot_plus_code_and_falls_back_to_lines(self) -> None:
+    def test_build_place_details_rejects_invalid_snapshot_plus_code_and_falls_back_to_lines(
+        self,
+    ) -> None:
         details = _build_place_details(
             "https://www.google.com/maps/place/Den",
             resolved_url="https://www.google.com/maps/place/Den",
