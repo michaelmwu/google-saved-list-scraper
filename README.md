@@ -237,6 +237,18 @@ Run the quality gates:
 ./scripts/typecheck.sh
 ```
 
+Install the git hooks locally:
+
+```bash
+uv run prek install
+```
+
+Run the same checks on demand:
+
+```bash
+uv run prek run --all-files
+```
+
 Run tests:
 
 ```bash
