@@ -124,9 +124,23 @@ _PLACE_JS_EXTRACTOR = r"""
     return null;
   };
 
+  const isReviewScoped = (element) => {
+    if (!element) {
+      return false;
+    }
+    if (element.closest("[data-review-id]")) {
+      return true;
+    }
+    const label = element.getAttribute?.("aria-label") || "";
+    return /review/i.test(label);
+  };
+
   const firstImageUrl = (selectors, root = panel) => {
     for (const selector of selectors) {
       const element = root.querySelector(selector);
+      if (isReviewScoped(element)) {
+        continue;
+      }
       const value = element?.currentSrc
         || element?.getAttribute("src")?.trim()
         || element?.getAttribute("data-src")?.trim();
@@ -141,6 +155,9 @@ _PLACE_JS_EXTRACTOR = r"""
     for (const selector of selectors) {
       const element = root.querySelector(selector);
       if (!element) {
+        continue;
+      }
+      if (isReviewScoped(element)) {
         continue;
       }
       const style = getComputedStyle(element).backgroundImage || "";
@@ -247,10 +264,6 @@ _PLACE_JS_EXTRACTOR = r"""
     "button[jsaction*='image'] img",
     "button[jsaction*='photo'] img",
     "[data-photo-index] img",
-    "img[src*='googleusercontent.com']",
-    "img[src*='ggpht.com']",
-    "img[data-src*='googleusercontent.com']",
-    "img[data-src*='ggpht.com']",
   ], document)
     || firstBackgroundImageUrl([
       "button[jsaction*='image']",
@@ -882,6 +895,10 @@ def _normalize_photo_url(value: object) -> str | None:
     ):
         return None
     if "streetviewpixels-pa.googleapis.com" in host:
+        return None
+    if (
+        "googleusercontent.com" in host or host.endswith("ggpht.com")
+    ) and path.startswith(("/a-", "/a/")):
         return None
     return normalized
 

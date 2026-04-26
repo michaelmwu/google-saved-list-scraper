@@ -4,6 +4,7 @@ import json
 import unittest
 
 from gmaps_scraper.place_scraper import (
+    _PLACE_JS_EXTRACTOR,
     _build_place_details,
     _clean_category_text,
     _clean_name_text,
@@ -16,6 +17,7 @@ from gmaps_scraper.place_scraper import (
     _merge_place_sources,
     _normalize_google_place_id,
     _normalize_phone_candidate,
+    _normalize_photo_url,
     _normalize_preview_website,
     _parse_review_count,
     _seed_google_consent_cookies,
@@ -23,6 +25,9 @@ from gmaps_scraper.place_scraper import (
 
 
 class PlaceScraperTests(unittest.TestCase):
+    def test_place_js_extractor_skips_review_scoped_photo_nodes(self) -> None:
+        self.assertIn('element.closest("[data-review-id]")', _PLACE_JS_EXTRACTOR)
+
     def test_parse_review_count_handles_suffixes(self) -> None:
         self.assertEqual(_parse_review_count("324"), 324)
         self.assertEqual(_parse_review_count("1,296"), 1296)
@@ -551,12 +556,37 @@ class PlaceScraperTests(unittest.TestCase):
         self.assertIsNone(details.main_photo_url)
         self.assertIsNone(details.photo_url)
 
+    def test_build_place_details_rejects_google_avatar_as_photo(self) -> None:
+        details = _build_place_details(
+            "https://www.google.com/maps/place/Fa+Burger",
+            resolved_url="https://www.google.com/maps/place/Fa+Burger",
+            snapshot={
+                "name": "Fa Burger",
+                "main_photo_url": "https://lh3.googleusercontent.com/a-/ALV-UjW_avatar",
+                "photo_url": "https://lh3.googleusercontent.com/a-/ALV-UjW_avatar",
+                "body_text": "Fa Burger",
+            },
+        )
+
+        self.assertIsNone(details.main_photo_url)
+        self.assertIsNone(details.photo_url)
+
     def test_extract_secondary_name_aborts_when_rating_line_follows_name(self) -> None:
         self.assertIsNone(
             _extract_secondary_name(
                 ["Den", "4.4", "傳"],
                 name="Den",
             )
+        )
+
+    def test_normalize_photo_url_rejects_google_avatar_urls(self) -> None:
+        self.assertIsNone(
+            _normalize_photo_url("https://lh3.googleusercontent.com/a-/ALV-UjW_avatar")
+        )
+        self.assertIsNone(_normalize_photo_url("https://lh5.ggpht.com/a/example-avatar"))
+        self.assertEqual(
+            _normalize_photo_url("https://lh3.googleusercontent.com/p/example=s680-w680-h510"),
+            "https://lh3.googleusercontent.com/p/example=s680-w680-h510",
         )
 
     def test_normalize_preview_website_rejects_streetview_thumbnail_urls(self) -> None:
