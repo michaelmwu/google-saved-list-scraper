@@ -137,15 +137,16 @@ _PLACE_JS_EXTRACTOR = r"""
 
   const firstImageUrl = (selectors, root = panel) => {
     for (const selector of selectors) {
-      const element = root.querySelector(selector);
-      if (isReviewScoped(element)) {
-        continue;
-      }
-      const value = element?.currentSrc
-        || element?.getAttribute("src")?.trim()
-        || element?.getAttribute("data-src")?.trim();
-      if (value) {
-        return value;
+      for (const element of root.querySelectorAll(selector)) {
+        if (isReviewScoped(element)) {
+          continue;
+        }
+        const value = element?.currentSrc
+          || element?.getAttribute("src")?.trim()
+          || element?.getAttribute("data-src")?.trim();
+        if (value) {
+          return value;
+        }
       }
     }
     return null;
@@ -153,17 +154,15 @@ _PLACE_JS_EXTRACTOR = r"""
 
   const firstBackgroundImageUrl = (selectors, root = panel) => {
     for (const selector of selectors) {
-      const element = root.querySelector(selector);
-      if (!element) {
-        continue;
-      }
-      if (isReviewScoped(element)) {
-        continue;
-      }
-      const style = getComputedStyle(element).backgroundImage || "";
-      const match = style.match(/url\((['"]?)(.*?)\1\)/);
-      if (match?.[2]) {
-        return match[2].trim();
+      for (const element of root.querySelectorAll(selector)) {
+        if (isReviewScoped(element)) {
+          continue;
+        }
+        const style = getComputedStyle(element).backgroundImage || "";
+        const match = style.match(/url\((['"]?)(.*?)\1\)/);
+        if (match?.[2]) {
+          return match[2].trim();
+        }
       }
     }
     return null;

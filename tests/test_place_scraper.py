@@ -27,6 +27,7 @@ from gmaps_scraper.place_scraper import (
 class PlaceScraperTests(unittest.TestCase):
     def test_place_js_extractor_skips_review_scoped_photo_nodes(self) -> None:
         self.assertIn('element.closest("[data-review-id]")', _PLACE_JS_EXTRACTOR)
+        self.assertIn("root.querySelectorAll(selector)", _PLACE_JS_EXTRACTOR)
 
     def test_parse_review_count_handles_suffixes(self) -> None:
         self.assertEqual(_parse_review_count("324"), 324)
