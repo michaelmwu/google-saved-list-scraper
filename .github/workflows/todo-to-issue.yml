@@ -35,14 +35,17 @@ jobs:
       - name: Commit and Push Changes
         run: |
           git add -A
-          git stash --include-untracked
+          has_stash=0
+          if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+            git stash push --include-untracked -m todo-to-issue-action
+            has_stash=1
+          fi
 
           git pull --rebase origin main
 
-          git stash pop || {
-            echo "Stash pop failed. Skipping push."
-            exit 0
-          }
+          if [[ "$has_stash" -eq 1 ]]; then
+            git stash pop
+          fi
 
           git add -A
           if [[ `git status --porcelain` ]]; then
